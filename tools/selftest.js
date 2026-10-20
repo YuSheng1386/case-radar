@@ -30,9 +30,13 @@ m = c.matchSameSystem({ district: '東區', address: '台中市東區大智路',
 assert.strictEqual(m, null);
 
 const t = c.tagsOf({ title: '屋主急售！低於行情 三房平車', isOwner: true });
-assert.ok(t.has('急售') && t.has('自售') && t.has('低於行情'));
+assert.ok(t.has('急售') && t.has('自售') && t.has('標低於行情'));
 assert.ok(c.tagsOf({ title: '認賠出清 景觀戶' }).has('賠售'));
-const s = c.scoreOf(new Set(['急售', '自售']), { count: 10, diff: -12 }, 5);
-assert.strictEqual(s.score, 25 + 20 + 15 + 20);
+assert.ok(c.tagsOf({ title: '秒殺價 兩房車位' }).has('急售'));
+assert.strictEqual(c.tagsOf({ title: '收租首選 稀有釋出 讓利' }).size, 0); // 實測沒優勢的詞不算
+// 急售18＋屋主自售12＋實測降5%（5+10）＋同區實登-12%（25）
+assert.strictEqual(c.scoreOf(new Set(['急售', '自售']), { count: 10, diff: -12 }, 5).score, 18 + 12 + 15 + 25);
+// 有同社區成交就以它為準，不再看同區：-9% → 30，低於最低成交 +10
+assert.strictEqual(c.scoreOf(new Set(), { count: 10, diff: -30 }, 0, { diff: -9, belowMin: true }).score, 40);
 
 console.log('selftest OK');

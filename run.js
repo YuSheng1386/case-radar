@@ -9,6 +9,7 @@ const core = require('./lib/core');
 const s591 = require('./lib/s591');
 const yc = require('./lib/yc');
 const market = require('./lib/market-price');
+const community = require('./lib/community');
 
 const ROOT = __dirname;
 const STATE = process.env.RADAR_STATE || path.join(ROOT, 'state');
@@ -16,6 +17,7 @@ const OUT = path.join(ROOT, 'docs', 'data.json');
 const F = {
   tracker: path.join(STATE, 'tracker.json'),
   ycList: path.join(STATE, 'yc-listings.json'),
+  community: path.join(STATE, 'community.json'),
   market: path.join(STATE, 'market-prices.json')
 };
 
@@ -54,6 +56,10 @@ async function main() {
   const sweep591 = known591.size === 0 || (full && twDay === 0) || process.env.RADAR_591_SWEEP === '1';
   runLog.sweep591 = sweep591;
   const jobs = [['591', () => s591.scrape({ ...filters, maxPages: sweep591 ? 1000 : 60, known: sweep591 ? null : known591 })]];
+  // 五區以外：只抓急售／賠售／自售等關鍵字＋屋主自售（量小，每次都完整抓，可直接判斷下架或拿掉關鍵字）
+  if (cfg.wideCity !== false) {
+    jobs.push(['591全市', () => s591.scrapeWide({ city: cfg.city, skipDistricts: cfg.districts, keywords: cfg.wideKeywords })]);
+  }
   if (full) {
     jobs.push(
       ['5168', () => require('./lib/5168').scrape(filters, 30)],
@@ -128,6 +134,24 @@ async function main() {
     catch (e) { console.error('[實登] 失敗:', e.message); }
   }
 
+  // ---- 4b. 同社區實登（591 社區成交）：有關鍵字的社區優先，其餘慢慢補 ----
+  const commCache = load(F.community, {});
+  {
+    const hotIds = new Set(), restIds = new Set();
+    for (const rec of Object.values(tracker.items)) {
+      const id = !rec.removedAt && rec.d?.communityId;
+      if (!id) continue;
+      (core.tagsOf(rec.d).size ? hotIds : restIds).add(id);
+    }
+    const ids = [...hotIds, ...[...restIds].filter(x => !hotIds.has(x))];
+    const t0 = Date.now();
+    const n = await community.refresh(ids, commCache, full ? 800 : 150);
+    for (const [id, s] of Object.entries(commCache)) if (Date.now() - s.t > 30 * 864e5) delete commCache[id];
+    save(F.community, commCache);
+    runLog.sources['社區實登'] = { ok: true, fetched: n, cached: Object.keys(commCache).length, of: ids.length, sec: Math.round((Date.now() - t0) / 1000) };
+    console.log('[社區實登]', JSON.stringify(runLog.sources['社區實登']));
+  }
+
   // ---- 5. 組合：去重 → 標籤 → 行情 → 同體系 → 分數 ----
   const active = [];
   for (const [key, rec] of Object.entries(tracker.items)) {
@@ -143,6 +167,7 @@ async function main() {
   const bootstrapCut = Date.parse(tracker.createdAt) + 6 * 3600e3; // 建檔頭 6 小時看到的不算「新上架」
 
   const cards = [];
+  const blocked = [];
   for (const g of groups) {
     const ms = g.members.slice().sort((a, b) => trustRank(a.source) - trustRank(b.source));
     const pick = f => (ms.find(m => m[f] != null && m[f] !== '') || {})[f];
@@ -160,20 +185,33 @@ async function main() {
     for (const m of ms) for (const t of core.tagsOf(m)) tags.add(t);
     const drop = Math.max(...ms.map(m => m._drop || 0));
     const mk = mkt ? market.compareWithMarket(rep, mkt) : null;
-    const { score, why } = core.scoreOf(tags, mk, drop);
-    const hot = tags.size > 0 || drop >= 2 || (mk && mk.count >= 5 && mk.diff <= -10);
+    const commId = pick('communityId');
+    const cm = commId ? community.compare(rep.unitPrice, commCache[commId]) : null;
+    if (cm && cm.diff < 0) tags.add('低於實登');
+    const { score, why } = core.scoreOf(tags, mk, drop, cm);
+    // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；
+    // 屋主自售不論分數都列（價格優勢小，但是可以開發的案源）
+    const hot = score >= (cfg.minScore ?? 20) || tags.has('自售');
     if (!hot) continue;
 
     const first = ms.map(m => m._first).sort()[0];
     const m = core.matchSameSystem(rep, storeIdx);
+    // 同體系店家已有 → 不能開發，關鍵字再好也一樣；另列一份給人工抽查比對有沒有誤判
     // 網頁是公開的：只放店數與可信度，不放店家電話
-    const same = m && { level: m.level, storeCount: m.storeCount, url: m.url };
+    if (m) {
+      blocked.push({ id: ms[0]._key, title: rep.title, district: rep.district, address: rep.address, community: rep.community,
+        price: rep.price, area: rep.area, floor: rep.floor, tags: [...tags], level: m.level, storeCount: m.storeCount,
+        ycUrl: m.url, url: ms[0].url });
+      continue;
+    }
     cards.push({
       id: ms[0]._key, ...rep, tags: [...tags], score, why, drop,
       market: mk && { median: mk.median, diff: mk.diff, n: mk.count, level: mk.matchLevel },
+      comm: cm && { med: cm.med, n: cm.n, min: cm.min, diff: cm.diff, belowMin: cm.belowMin, recent: cm.recent,
+        url: `https://market.591.com.tw/${commId}` },
       sources: ms.map(m => ({ s: m.source, url: m.url, price: m.price, agent: m.agent || '', hist: m._hist })),
-      firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3,
-      sameSystem: same
+      wide: !cfg.districts.includes(rep.district),
+      firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     });
   }
   cards.sort((a, b) => b.score - a.score);
@@ -185,14 +223,14 @@ async function main() {
     sources: tracker.sources, run: runLog,
     sameSystem: { at: ycData.at, listings: (ycData.listings || []).length, stores: storeCounts.length },
     market: mkt && { updatedAt: mkt.updatedAt, seasons: mkt.seasons },
-    totals: { active: active.length, groups: groups.length, hot: cards.length,
-      blocked: cards.filter(c => c.sameSystem).length },
-    cards
+    totals: { active: active.length, groups: groups.length, hot: cards.length, blocked: blocked.length },
+    cards,
+    blocked
   };
   save(OUT, out);
   tracker.runs = [runLog, ...(tracker.runs || [])].slice(0, 50);
   save(F.tracker, tracker);
-  console.log(`完成：在架 ${active.length} → 去重 ${groups.length} → 有競爭力 ${cards.length}（同體系已有 ${out.totals.blocked}）`);
+  console.log(`完成：在架 ${active.length} → 去重 ${groups.length} → 有競爭力可開發 ${cards.length}（同體系已有、排除 ${blocked.length}）`);
 
   // 全部來源都失敗才讓排程標紅
   if (!Object.values(runLog.sources).some(s => s.ok)) process.exit(1);
