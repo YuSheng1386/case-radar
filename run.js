@@ -190,8 +190,10 @@ async function main() {
     if (cm && cm.diff < 0) tags.add('低於實登');
     const { score, why } = core.scoreOf(tags, mk, drop, cm);
     // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；
-    // 屋主自售不論分數都列（價格優勢小，但是可以開發的案源）
-    const hot = score >= (cfg.minScore ?? 20) || tags.has('自售');
+    // 只有屋主自己在賣（沒有任何仲介刊登）不論分數都列＝可開發案源；
+    // 屋主已經找了仲介 → 跟一般案一樣，要靠關鍵字／低於行情拿到分數才列（用戶指示 2026-10-21）
+    const ownerOnly = ms.some(x => x.isOwner) && ms.every(x => x.isOwner);
+    const hot = score >= (cfg.minScore ?? 20) || ownerOnly;
     if (!hot) continue;
 
     const first = ms.map(m => m._first).sort()[0];
