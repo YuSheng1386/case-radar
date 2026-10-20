@@ -126,15 +126,17 @@ const Match = (() => {
   }
 
   // 「系統學到的」：給仲介看的建議（不自動改客需，由人確認）
+  // 社區名、原因來自外部刊登資料或客人輸入 → 一律跳脫再放進 HTML
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   function learn(history, prefs) {
     const H = digest(history);
     const tips = [];
-    const top = o => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 4);
+    const top = o => Object.entries(o).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([k, v]) => [esc(k), v]);
     if (H.nLiked) tips.push(`喜歡 ${H.nLiked} 件，價位中位 <b>${H.likedMid} 萬</b>`);
     const lc = top(H.likedComm); if (lc.length) tips.push(`喜歡的社區：${lc.map(([k, v]) => `<b>${k}</b>(${v})`).join('、')}`);
     const ld = top(H.likedDist); if (ld.length) tips.push(`喜歡的區：${ld.map(([k, v]) => `${k}(${v})`).join('、')}`);
     const rs = top(H.reasons); if (rs.length) tips.push(`不喜歡的原因：${rs.map(([k, v]) => `<b>${k}</b>×${v}`).join('、')}`);
-    if (H.dislikedComm.size) tips.push(`已整個排除的社區：${[...H.dislikedComm].join('、')}`);
+    if (H.dislikedComm.size) tips.push(`已整個排除的社區：${[...H.dislikedComm].map(esc).join('、')}`);
     if ((H.reasons['價格太高'] || 0) >= 2 && H.likedMid && prefs?.priceMax > H.likedMid * 1.1)
       tips.push(`建議：預算上限可考慮調到 <b>${Math.round(H.likedMid * 1.1)} 萬</b>（嫌貴 ${H.reasons['價格太高']} 次）`);
     if ((H.reasons['樓層'] || 0) >= 2) tips.push('建議：樓層被嫌過 2 次以上，確認一下「喜好樓層／不要樓層」');

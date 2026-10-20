@@ -72,7 +72,8 @@ export default {
     try {
       // 分享頁（公開）
       if (m === 'GET' && /^\/s\/[a-f0-9]{24}$/.test(p)) {
-        return env.ASSETS.fetch(new Request(new URL('/share.html', url), req));
+        // 注意要用 /share 不是 /share.html：靜態檔服務會把 .html 307 轉址到 /share，客人就拿不到 token
+        return env.ASSETS.fetch(new Request(new URL('/share', url), req));
       }
       if (p.startsWith('/api/')) return await api(req, env, url, p, m);
       return env.ASSETS.fetch(req);
