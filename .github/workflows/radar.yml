@@ -47,6 +47,7 @@ jobs:
       - name: 執行雷達
         env:
           EXCLUDED_STORES: ${{ secrets.EXCLUDED_STORES }}
+          RADAR_SKIP: '5168'   # 5168 擋海外 IP（tools/probe-sites.js 實測 403）
           RADAR_MODE: ${{ (github.event.schedule == '30 20 * * *' || inputs.mode == 'full') && 'full' || 'quick' }}
         run: node run.js
 

@@ -15,7 +15,6 @@ const STATE = process.env.RADAR_STATE || path.join(ROOT, 'state');
 const OUT = path.join(ROOT, 'docs', 'data.json');
 const F = {
   tracker: path.join(STATE, 'tracker.json'),
-  ycCache: path.join(STATE, 'yc-cache.json'),
   ycList: path.join(STATE, 'yc-listings.json'),
   market: path.join(STATE, 'market-prices.json')
 };
@@ -64,7 +63,8 @@ async function main() {
     );
   }
   const fresh = {};
-  for (const [name, fn] of jobs) {
+  const skip = (process.env.RADAR_SKIP || '').split(',').filter(Boolean); // 例：GitHub 上 5168 擋海外 IP
+  for (const [name, fn] of jobs.filter(([n]) => !skip.includes(n))) {
     const t0 = Date.now();
     try {
       fresh[name] = await fn();
@@ -111,9 +111,7 @@ async function main() {
   let ycData = load(F.ycList, { at: null, listings: [], storeCounts: {} });
   if (full && cfg.excludedStores.length) {
     try {
-      const cache = load(F.ycCache, {});
-      const r = await yc.scrapeStores(cfg.excludedStores, cache);
-      save(F.ycCache, cache);
+      const r = await yc.scrapeStores(cfg.excludedStores);
       ycData = { at: now, ...r };
       save(F.ycList, ycData);
       runLog.sources['同體系'] = { ok: true, count: r.listings.length };
