@@ -188,12 +188,18 @@ async function main() {
     const commId = pick('communityId');
     const cm = commId ? community.compare(rep.unitPrice, commCache[commId]) : null;
     if (cm && cm.diff < 0) tags.add('低於實登');
-    const { score, why } = core.scoreOf(tags, mk, drop, cm);
-    // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；
-    // 只有屋主自己在賣（沒有任何仲介刊登）不論分數都列＝可開發案源；
-    // 屋主已經找了仲介 → 跟一般案一樣，要靠關鍵字／低於行情拿到分數才列（用戶指示 2026-10-21）
-    const ownerOnly = ms.some(x => x.isOwner) && ms.every(x => x.isOwner);
-    const hot = score >= (cfg.minScore ?? 20) || ownerOnly;
+    let { score, why } = core.scoreOf(tags, mk, drop, cm);
+    // 開發優先順序（用戶指示 2026-10-21）：
+    //   只有屋主自己在賣（沒有仲介）→ 額外 +8（連同屋主自售 12 共 20），排最前
+    //   屋主＋仲介 → 一樣上榜，但只拿屋主自售 12，主要靠關鍵字／低於行情排序
+    //   5 位以上仲介在刊 → −5（一般約、競爭激烈）
+    const owner = ms.some(x => x.isOwner);
+    const ownerOnly = owner && ms.every(x => x.isOwner);
+    const agentCount = new Set(ms.filter(x => !x.isOwner).map(x => x.agent || x.source)).size;
+    if (ownerOnly) { score += 8; why.push('只有屋主在賣+8'); }
+    if (agentCount >= 5) { score -= 5; why.push(`${agentCount}位仲介在刊-5`); }
+    // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；屋主刊登的都列
+    const hot = score >= (cfg.minScore ?? 20) || owner;
     if (!hot) continue;
 
     const first = ms.map(m => m._first).sort()[0];
@@ -213,11 +219,7 @@ async function main() {
         url: `https://market.591.com.tw/${commId}` },
       sources: ms.map(m => ({ s: m.source, url: m.url, price: m.price, agent: m.agent || '', hist: m._hist })),
       // 幾個人在賣：屋主自己刊、沒有仲介 = 最好開發；十幾個仲介 = 大概是一般約、競爭激烈
-      posters: {
-        total: ms.length,
-        agents: new Set(ms.filter(x => !x.isOwner).map(x => x.agent || x.source)).size,
-        owner: ms.some(x => x.isOwner)
-      },
+      posters: { total: ms.length, agents: agentCount, owner },
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     });
