@@ -210,6 +210,12 @@ async function main() {
       comm: cm && { med: cm.med, n: cm.n, min: cm.min, diff: cm.diff, belowMin: cm.belowMin, recent: cm.recent,
         url: `https://market.591.com.tw/${commId}` },
       sources: ms.map(m => ({ s: m.source, url: m.url, price: m.price, agent: m.agent || '', hist: m._hist })),
+      // 幾個人在賣：屋主自己刊、沒有仲介 = 最好開發；十幾個仲介 = 大概是一般約、競爭激烈
+      posters: {
+        total: ms.length,
+        agents: new Set(ms.filter(x => !x.isOwner).map(x => x.agent || x.source)).size,
+        owner: ms.some(x => x.isOwner)
+      },
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     });

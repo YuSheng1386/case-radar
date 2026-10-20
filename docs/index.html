@@ -42,6 +42,9 @@ main{max-width:860px;margin:0 auto;padding:10px 16px 60px}
 .blk{font-size:12px;color:var(--hot);margin-top:4px}
 .blk a{color:inherit}
 .mk a{color:inherit}
+.who{font-size:12px;padding:1px 7px;border-radius:5px;background:var(--chip);color:var(--mut)}
+.who.own{color:var(--own);font-weight:600}.who.many{color:var(--hot)}
+.more{width:100%;font-size:12px}.more summary{cursor:pointer;color:var(--mut)}.more a{display:inline-block;margin:4px 6px 0 0}
 .blkbox{margin-top:18px;border:1px dashed var(--line);border-radius:10px;padding:8px 12px;font-size:13px}
 .blkbox summary{cursor:pointer;color:var(--mut)}
 .blkrow{padding:6px 0;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;gap:4px 8px;align-items:baseline}
@@ -126,9 +129,20 @@ function card(c) {
       <div class="price">${c.price ?? '—'} 萬${hi > c.price ? `<s>${hi} 萬</s>` : ''} <span class="meta">${c.drop ? `降 ${c.drop}%` : ''}</span></div>
       <div class="meta">${esc(c.district)}｜${esc(c.community || c.address)}｜${c.area ?? '—'} 坪｜${esc(c.floor || '—')}｜${c.age != null && c.age !== '' ? esc(c.age) + (String(c.age).includes('年') ? '' : ' 年') : '屋齡—'}｜${esc(c.layout || c.type || '')}</div>
       ${mk}
-      <div class="srcs">${c.sources.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.s)} ${s.price ?? ''}${s.agent ? '・' + esc(s.agent.replace(/^仲介/, '')) : ''}</a>`).join('')}</div>
+      <div class="srcs">${srcLinks(c)}</div>
       <div class="why">首次看到 ${ago(c.firstSeen)}｜${esc(c.why.join('、'))}</div>
     </div></div>`;
+}
+
+// 同一戶常被很多仲介重複刊登：最便宜的先列，最多 4 個連結，其餘摺疊
+function srcLinks(c) {
+  const p = c.posters || { total: c.sources.length, agents: 0, owner: false };
+  const who = p.owner && p.agents === 0 ? '<span class="who own">只有屋主自己在賣</span>'
+    : `<span class="who${p.agents >= 5 ? ' many' : ''}">${p.owner ? '屋主＋' : ''}${p.agents} 位仲介在刊</span>`;
+  const link = s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.s)} ${s.price ?? ''}${s.agent ? '・' + esc(s.agent.replace(/^仲介/, '')) : ''}</a>`;
+  const ss = c.sources.slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9));
+  const more = ss.length > 4 ? `<details class="more"><summary>其他 ${ss.length - 4} 筆</summary>${ss.slice(4).map(link).join('')}</details>` : '';
+  return who + ss.slice(0, 4).map(link).join('') + more;
 }
 
 $('tagbar').innerHTML = TAGS.map(t => `<button class="chip${t === tag ? ' on' : ''}" data-t="${t}">${t}</button>`).join('');

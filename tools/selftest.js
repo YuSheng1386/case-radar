@@ -39,4 +39,11 @@ assert.strictEqual(c.scoreOf(new Set(['急售', '自售']), { count: 10, diff: -
 // 有同社區成交就以它為準，不再看同區：-9% → 30，低於最低成交 +10
 assert.strictEqual(c.scoreOf(new Set(), { count: 10, diff: -30 }, 0, { diff: -9, belowMin: true }).score, 40);
 
+// 591 同一戶多仲介刊登：總樓層打錯、坪數小數差一點仍算同一戶
+const u = (o) => ({ source: '591', district: '北屯區', address: '台中市北屯區敦富路', community: '惠宇一森青', area: 63.47, price: 3588, ...o });
+assert.ok(c.sameUnitSameSource(u({ floor: '17F/21F' }), u({ floor: '17F/27F', area: 63.5 })));
+assert.ok(!c.sameUnitSameSource(u({ floor: '17F/21F' }), u({ floor: '16F/21F' })));          // 不同樓層
+assert.ok(!c.sameUnitSameSource(u({ floor: '17F/21F' }), u({ floor: '17F/21F', area: 45 }))); // 不同戶型
+assert.strictEqual(c.dedupe([u({ sourceId: 1, floor: '17F/21F' }), u({ sourceId: 2, floor: '17F/22F' }), u({ sourceId: 3, floor: '9F/21F' })]).length, 2);
+
 console.log('selftest OK');
