@@ -59,6 +59,14 @@ curl -s -b $J2 $B/api/users | grep -q 只有管理者 && ok "成員不能管帳�
 curl -s -b $J2 -X PUT $B/api/dev/$I1 -H 'Content-Type: application/json' -d '{"status":"已聯絡","note":"t"}' | grep -q ok && ok "成員可更新開發進度" || bad "開發進度"
 curl -s -b $J $B/api/dev | grep -q 成員一 && ok "管理者看得到誰在跟" || bad "開發進度共用"
 
+echo "4b. 新配對提醒（Actions 讀客需、寫提醒）"
+curl -s -o /dev/null -w '%{http_code}' $B/api/ingest/clients | grep -q 401 && ok "沒金鑰讀不到客需" || bad "客需未保護"
+curl -s -H 'X-Ingest-Key: test-ingest-key' $B/api/ingest/clients | grep -q 測試客戶 && ok "Actions 讀得到客需" || bad "讀客需"
+curl -s -X POST -H 'X-Ingest-Key: test-ingest-key' -H 'Content-Type: application/json' $B/api/ingest/alerts -d "{\"alerts\":[{\"client_id\":$CID,\"item_id\":\"$I2\",\"ms\":45,\"why\":\"測試\"},{\"client_id\":$CID,\"item_id\":\"$I2\",\"ms\":45}]}" | grep -q ok && ok "寫入新配對（重複的忽略）" || bad "寫新配對"
+curl -s -b $J $B/api/clients | grep -q '"new_count":1' && ok "客戶列表顯示 1 件新配對" || bad "new_count"
+curl -s -b $J2 $B/api/clients/$CID/alerts | grep -q 沒有權限 && ok "成員讀不到別人的新配對" || bad "新配對越權"
+curl -s -b $J -X POST $B/api/clients/$CID/alerts/seen | grep -q ok && curl -s -b $J $B/api/clients | grep -q '"new_count":0' && ok "打開後標已看" || bad "標已看"
+
 echo "5. 登入鎖定"
 for i in $(seq 1 8); do curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d '{"username":"member1","password":"bad"}' >/dev/null; done
 curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d '{"username":"member1","password":"member-pass-1"}' | grep -q 太多次 && ok "連錯 8 次鎖 15 分鐘" || bad "沒有鎖定"

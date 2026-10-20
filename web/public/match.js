@@ -151,3 +151,5 @@ const Match = (() => {
 
   return { run, learn, snapshot, typeOf, layout, DISLIKE_REASONS, TYPES, BUILDER_GROUPS };
 })();
+// GitHub Actions（tools/notify.js）也用同一套規則算新配對
+if (typeof module !== 'undefined') module.exports = Match;

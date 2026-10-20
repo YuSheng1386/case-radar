@@ -42,5 +42,12 @@ jobs:
           RADAR_MODE: ${{ (github.event.schedule == '30 20 * * *' || inputs.mode == 'full') && 'full' || 'quick' }}
         run: node run.js
 
+      # 新的好案＋客戶新配對 → 寫網站＋合併一則 LINE（沒設 LINE_TOKEN 就只寫網站）
+      - name: 新案件／新配對提醒
+        env:
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          LINE_TO: ${{ secrets.LINE_TO }}
+        run: node tools/notify.js
+
       - name: 上傳到網站
         run: node tools/sync.js push

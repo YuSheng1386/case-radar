@@ -101,6 +101,27 @@ async function api(req, env, url, p, m) {
     }
   }
 
+  // GitHub Actions 算新配對用：客需＋客人反應（tools/notify.js；Actions 日誌是公開的，那邊不印任何客戶資料）
+  if (p === '/api/ingest/clients' && m === 'GET') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const [cs, its] = await env.DB.batch([
+      env.DB.prepare('SELECT c.id, c.name, c.prefs, u.name AS owner_name FROM clients c JOIN users u ON u.id = c.owner_id WHERE c.active = 1'),
+      env.DB.prepare('SELECT ci.client_id, ci.item_id, ci.status, ci.reasons, ci.snapshot FROM client_items ci JOIN clients c ON c.id = ci.client_id WHERE c.active = 1')
+    ]);
+    return json({ clients: cs.results, items: its.results });
+  }
+  if (p === '/api/ingest/alerts' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const b = await body(req);
+    const al = (b.alerts || []).slice(0, 500);
+    if (al.length) await env.DB.batch(al.map(a => env.DB.prepare(
+      `INSERT INTO match_alerts (client_id, item_id, ms, why) VALUES (?, ?, ?, ?) ON CONFLICT(client_id, item_id) DO NOTHING`
+    ).bind(+a.client_id, String(a.item_id), Math.round(+a.ms || 0), String(a.why || '').slice(0, 300))));
+    // 看過超過 30 天的清掉
+    await env.DB.prepare(`DELETE FROM match_alerts WHERE seen_at IS NOT NULL AND seen_at < datetime('now', '-30 days')`).run();
+    return json({ ok: true, n: al.length });
+  }
+
   // ===== 第一次設定：建立管理者（需要 SETUP_CODE，且資料庫還沒有任何帳號）=====
   if (p === '/api/setup' && m === 'GET') {
     const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM users').first();
@@ -228,9 +249,10 @@ async function api(req, env, url, p, m) {
 
   // ----- 客戶 -----
   if (p === '/api/clients' && m === 'GET') {
+    const NEWC = `(SELECT COUNT(*) FROM match_alerts a WHERE a.client_id = c.id AND a.seen_at IS NULL) AS new_count`;
     const q = user.role === 'admin'
-      ? env.DB.prepare(`SELECT c.*, u.name AS owner_name FROM clients c JOIN users u ON u.id = c.owner_id WHERE c.active = 1 ORDER BY c.updated_at DESC`)
-      : env.DB.prepare(`SELECT c.*, u.name AS owner_name FROM clients c JOIN users u ON u.id = c.owner_id WHERE c.active = 1 AND c.owner_id = ? ORDER BY c.updated_at DESC`).bind(user.id);
+      ? env.DB.prepare(`SELECT c.*, u.name AS owner_name, ${NEWC} FROM clients c JOIN users u ON u.id = c.owner_id WHERE c.active = 1 ORDER BY c.updated_at DESC`)
+      : env.DB.prepare(`SELECT c.*, u.name AS owner_name, ${NEWC} FROM clients c JOIN users u ON u.id = c.owner_id WHERE c.active = 1 AND c.owner_id = ? ORDER BY c.updated_at DESC`).bind(user.id);
     return json((await q.all()).results);
   }
   if (p === '/api/clients' && m === 'POST') {
@@ -289,6 +311,16 @@ async function api(req, env, url, p, m) {
     stmts.push(env.DB.prepare(`UPDATE clients SET updated_at = datetime('now') WHERE id = ?`).bind(c.id));
     await env.DB.batch(stmts);
     return json({ ok: true, token, url: `${url.origin}/s/${token}` });
+  }
+  // 新配對提醒：GET 取還沒看的；POST .../seen 全部標已看
+  if ((r = p.match(/^\/api\/clients\/(\d+)\/alerts(\/seen)?$/))) {
+    const c = await canAccessClient(env, user, +r[1]);
+    if (!c) return err('找不到客戶或沒有權限', 404);
+    if (!r[2] && m === 'GET') return json((await env.DB.prepare('SELECT item_id, ms, why, created_at FROM match_alerts WHERE client_id = ? AND seen_at IS NULL').bind(c.id).all()).results);
+    if (r[2] && m === 'POST') {
+      await env.DB.prepare(`UPDATE match_alerts SET seen_at = datetime('now') WHERE client_id = ? AND seen_at IS NULL`).bind(c.id).run();
+      return json({ ok: true });
+    }
   }
   if ((r = p.match(/^\/api\/clients\/(\d+)\/shares$/)) && m === 'GET') {
     const c = await canAccessClient(env, user, +r[1]);

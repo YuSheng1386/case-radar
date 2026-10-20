@@ -192,7 +192,7 @@ async function viewClients() {
   const list = await api('/api/clients');
   $('#main').innerHTML = `<div class="row-btns" style="margin:0 0 12px"><button class="pri" id="add">＋ 新增客戶</button></div>
     ${list.length ? `<div class="panel"><table><tr><th>客戶</th><th>需求摘要</th>${ME.role === 'admin' ? '<th>負責</th>' : ''}<th>更新</th></tr>
-    ${list.map(c => { const p = JSON.parse(c.prefs || '{}'); return `<tr><td><a href="#client/${c.id}"><b>${esc(c.name)}</b></a></td>
+    ${list.map(c => { const p = JSON.parse(c.prefs || '{}'); return `<tr><td><a href="#client/${c.id}"><b>${esc(c.name)}</b></a>${c.new_count ? ` <span class="pill newm">${c.new_count} 件新配對</span>` : ''}</td>
       <td class="meta">${esc([(p.districts || []).join('、'), p.priceMax ? `${p.priceMin || 0}–${p.priceMax} 萬` : '', (p.types || []).join('/'), p.roomsMin ? `${p.roomsMin}房以上` : ''].filter(Boolean).join('｜'))}</td>
       ${ME.role === 'admin' ? `<td class="meta">${esc(c.owner_name)}</td>` : ''}<td class="meta">${ago(c.updated_at)}</td></tr>`; }).join('')}</table></div>`
     : '<div class="empty">還沒有客戶，按「新增客戶」把客需填進來</div>'}`;
@@ -206,10 +206,12 @@ async function viewClients() {
 // ================= 單一客戶：客需、配對、分享、反應 =================
 async function viewClient(id) {
   $('#main').innerHTML = '<div class="empty">載入中…</div>';
-  const [list, items, shares, pool] = await Promise.all([api('/api/clients'), api(`/api/clients/${id}/items`), api(`/api/clients/${id}/shares`), blob('pool')]);
+  const [list, items, shares, pool, alerts] = await Promise.all([api('/api/clients'), api(`/api/clients/${id}/items`), api(`/api/clients/${id}/shares`), blob('pool'), api(`/api/clients/${id}/alerts`)]);
   const c = list.find(x => String(x.id) === String(id)); if (!c) throw new Error('找不到客戶');
   const prefs = JSON.parse(c.prefs || '{}');
-  const S = { sel: new Set(), showSeen: false, limit: 30 };
+  // 新配對（雲端排程算的）：這次打開就標已看，畫面上仍標「新」直到離開
+  const S = { sel: new Set(), showSeen: false, limit: 30, fresh: new Set(alerts.map(a => a.item_id)) };
+  if (alerts.length) api(`/api/clients/${id}/alerts/seen`, { method: 'POST' }).catch(() => {});
 
   $('#main').innerHTML = `
     <div class="bar"><a href="#clients">← 客戶列表</a><b style="font-size:17px;margin-left:6px">${esc(c.name)}</b><span class="meta">${esc(c.contact || '')}</span></div>
@@ -250,9 +252,12 @@ async function viewClient(id) {
   function drawMatch() {
     const cur = readPrefs();
     const r = Match.run(pool.items, cur, items, { includeSeen: S.showSeen });
-    $('#mstat').textContent = `案件池 ${pool.items.length} 筆 → 符合 ${r.items.length} 筆（資料更新 ${ago(pool.generatedAt)}）`;
+    // 新配對排最前
+    if (S.fresh.size) r.items.sort((a, b) => S.fresh.has(b.id) - S.fresh.has(a.id) || b.ms - a.ms);
+    const nf = r.items.filter(x => S.fresh.has(x.id)).length;
+    $('#mstat').textContent = `案件池 ${pool.items.length} 筆 → 符合 ${r.items.length} 筆${nf ? `，其中 ${nf} 件是新配對` : ''}（資料更新 ${ago(pool.generatedAt)}）`;
     $('#mout').textContent = Object.keys(r.out).length ? '被篩掉：' + Object.entries(r.out).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}`).join('、') : '';
-    $('#mlist').innerHTML = r.items.slice(0, S.limit).map(it => matchCard(it, S.sel.has(it.id))).join('') +
+    $('#mlist').innerHTML = r.items.slice(0, S.limit).map(it => matchCard(it, S.sel.has(it.id), S.fresh.has(it.id))).join('') +
       (r.items.length > S.limit ? `<div class="row-btns"><button id="moreM">再多看 30 筆</button></div>` : '');
     if ($('#moreM')) $('#moreM').onclick = () => { S.limit += 30; drawMatch(); };
     $('#mlist').onclick = e => {
@@ -279,10 +284,10 @@ async function viewClient(id) {
   window._redrawMatch = drawMatch;
 }
 
-function matchCard(it, sel) {
+function matchCard(it, sel, fresh) {
   return `<div class="card${sel ? ' sel' : ''}" data-id="${esc(it.id)}" style="cursor:pointer"><img loading="lazy" src="${esc(it.ph)}" alt="" onerror="this.style.visibility='hidden'"><div>
     <div class="top-row"><div class="ttl"><input type="checkbox" ${sel ? 'checked' : ''} style="pointer-events:none"> ${esc(it.c || it.t || it.a)}</div><div class="score">${it.ms}</div></div>
-    <div class="tags">${(it.tg || []).map(t => `<span class="tag t-${t}">${t}</span>`).join('')}${it.same ? '<span class="tag t-同體系">同體系物件</span>' : ''}</div>
+    <div class="tags">${fresh ? '<span class="tag t-新">新配對</span>' : ''}${(it.tg || []).map(t => `<span class="tag t-${t}">${t}</span>`).join('')}${it.same ? '<span class="tag t-同體系">同體系物件</span>' : ''}</div>
     <div class="price">${it.p ?? '—'} 萬 <span class="meta">${it.up ? it.up + ' 萬/坪' : ''}${it.cm != null ? `・比同社區實登 ${sign(it.cm)}` : ''}</span></div>
     <div class="meta">${esc(it.d)}｜${esc(it.a)}｜${it.ar ?? '—'} 坪｜${esc(it.fl || '—')}｜${it.ag != null && it.ag !== '' ? esc(it.ag) + ' 年' : '屋齡—'}｜${esc(it.ly || it.ty || '')}</div>
     <div class="why">${esc(it.why.join('、'))}｜<a href="${esc(it.u)}" target="_blank" rel="noopener">看刊登</a>｜${esc((it.s || []).join('、'))}</div>

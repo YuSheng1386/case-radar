@@ -71,6 +71,17 @@ CREATE TABLE IF NOT EXISTS login_fails (
   at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- 新配對提醒：GitHub Actions（tools/notify.js）算出客戶的新高分配對寫進來；仲介打開客戶頁就標已看
+CREATE TABLE IF NOT EXISTS match_alerts (
+  client_id INTEGER NOT NULL,
+  item_id TEXT NOT NULL,
+  ms INTEGER NOT NULL DEFAULT 0,             -- 配對分數
+  why TEXT DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  seen_at TEXT,
+  PRIMARY KEY (client_id, item_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_clients_owner ON clients(owner_id);
 CREATE INDEX IF NOT EXISTS idx_ci_status ON client_items(status);
 CREATE INDEX IF NOT EXISTS idx_shares_client ON shares(client_id);

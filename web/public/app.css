@@ -74,3 +74,4 @@ td,th{border-bottom:1px solid var(--line);padding:6px 4px;text-align:left;vertic
 .blkrow{padding:6px 0;border-top:1px solid var(--line)}
 details.more summary{cursor:pointer;color:var(--mut);font-size:12px}
 @media (max-width:520px){.card{grid-template-columns:72px 1fr;gap:10px}.card img{width:72px;height:56px}}
+.pill.newm{background:var(--acc);color:#fff;font-weight:600}
