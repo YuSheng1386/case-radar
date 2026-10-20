@@ -1,0 +1,4 @@
+state/
+stores.local.json
+docs/data.json
+node_modules/

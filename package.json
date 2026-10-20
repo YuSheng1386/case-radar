@@ -1,0 +1,8 @@
+{
+  "name": "case-radar",
+  "version": "1.0.0",
+  "description": "案件雷達：急售／賠售／自售／降價／低於行情案件追蹤，閃避同體系店",
+  "private": true,
+  "scripts": { "quick": "node run.js", "full": "node run.js --full", "serve": "npx --yes http-server docs -p 3007 -c-1" },
+  "engines": { "node": ">=20" }
+}

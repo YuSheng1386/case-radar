@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>案件雷達</title>
+<style>
+:root{--bg:#f6f5f2;--card:#fff;--ink:#1d1d1b;--mut:#6b6a66;--line:#e4e2dc;--acc:#b4441f;--hot:#c0392b;--own:#1f6f8b;--down:#7a5b00;--low:#2e7d32;--blk:#8a8a8a;--chip:#efede7}
+@media (prefers-color-scheme:dark){:root{--bg:#141413;--card:#1e1e1c;--ink:#ecebe6;--mut:#a3a29c;--line:#33322f;--acc:#e07a52;--hot:#ef6b5b;--own:#5fb4d0;--down:#d9b23c;--low:#6cc070;--blk:#777;--chip:#2a2a27}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 -apple-system,"PingFang TC","Noto Sans TC","Microsoft JhengHei",sans-serif}
+header{position:sticky;top:0;z-index:5;background:var(--bg);border-bottom:1px solid var(--line);padding:10px 16px 8px}
+h1{font-size:18px;margin:0;display:flex;align-items:baseline;gap:8px}
+h1 small{font-size:12px;color:var(--mut);font-weight:400}
+.bar{display:flex;gap:6px;overflow-x:auto;padding:8px 0 2px;scrollbar-width:none}
+.bar::-webkit-scrollbar{display:none}
+.chip{flex:none;border:1px solid var(--line);background:var(--chip);color:var(--ink);border-radius:999px;padding:4px 11px;font-size:13px;cursor:pointer}
+.chip.on{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.row2{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px;font-size:13px;color:var(--mut)}
+select,input[type=search]{font:inherit;font-size:13px;background:var(--card);color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:4px 6px}
+input[type=search]{flex:1;min-width:120px}
+main{max-width:860px;margin:0 auto;padding:10px 16px 60px}
+.stat{font-size:12px;color:var(--mut);margin:4px 0 10px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px;display:grid;grid-template-columns:96px 1fr;gap:12px}
+.card.blocked{opacity:.55}
+.card img{width:96px;height:72px;object-fit:cover;border-radius:6px;background:var(--chip)}
+.top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.ttl{font-weight:600;font-size:14px;word-break:break-all}
+.score{flex:none;font-size:12px;font-weight:700;color:var(--acc);border:1.5px solid var(--acc);border-radius:6px;padding:0 6px}
+.tags{display:flex;gap:4px;flex-wrap:wrap;margin:4px 0}
+.tag{font-size:11px;padding:1px 7px;border-radius:4px;color:#fff;background:var(--mut)}
+.t-急售,.t-賠售{background:var(--hot)}.t-自售{background:var(--own)}.t-降價{background:var(--down)}.t-低於行情{background:var(--low)}.t-新{background:var(--acc)}.t-同體系{background:var(--blk)}
+.price{font-size:17px;font-weight:700}
+.price s{font-size:12px;color:var(--mut);font-weight:400;margin-left:4px}
+.meta{font-size:12.5px;color:var(--mut)}
+.mk{font-size:12.5px}
+.mk b.lo{color:var(--low)}.mk b.hi{color:var(--hot)}
+.srcs{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.srcs a{font-size:12px;color:var(--ink);text-decoration:none;border:1px solid var(--line);border-radius:5px;padding:1px 7px}
+.why{font-size:11.5px;color:var(--mut);margin-top:4px}
+.blk{font-size:12px;color:var(--hot);margin-top:4px}
+.blk a{color:inherit}
+.empty{color:var(--mut);text-align:center;padding:40px 0}
+@media (max-width:480px){.card{grid-template-columns:72px 1fr;gap:10px}.card img{width:72px;height:56px}}
+</style>
+</head>
+<body>
+<header>
+  <h1>案件雷達 <small id="upd">載入中…</small></h1>
+  <div class="bar" id="tagbar"></div>
+  <div class="row2">
+    <select id="dist"><option value="">全部區域</option></select>
+    <select id="sort">
+      <option value="score">依分數</option>
+      <option value="new">依上架時間</option>
+      <option value="drop">依降幅</option>
+      <option value="mk">依低於行情</option>
+    </select>
+    <label><input type="checkbox" id="showBlk"> 顯示同體系已有</label>
+    <input type="search" id="q" placeholder="搜尋社區／路名／標題">
+  </div>
+</header>
+<main>
+  <div class="stat" id="stat"></div>
+  <div id="list"></div>
+</main>
+<script>
+const TAGS = ['全部', '新上架', '急售', '賠售', '自售', '降價', '低於行情'];
+let data = null, tag = '全部';
+const $ = id => document.getElementById(id);
+const LS = { get(k, d) { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch { return d; } },
+             set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} } };
+const ago = iso => { if (!iso) return '—'; const m = (Date.now() - Date.parse(iso)) / 6e4;
+  return m < 60 ? `${Math.round(m)} 分鐘前` : m < 1440 ? `${Math.round(m / 60)} 小時前` : `${Math.round(m / 1440)} 天前`; };
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function render() {
+  const d = $('dist').value, q = $('q').value.trim(), showBlk = $('showBlk').checked, sort = $('sort').value;
+  let cs = data.cards.filter(c =>
+    (showBlk || !c.sameSystem) &&
+    (!d || c.district === d) &&
+    (tag === '全部' || (tag === '新上架' ? c.isNew : c.tags.includes(tag))) &&
+    (!q || [c.title, c.community, c.address].join(' ').includes(q)));
+  const key = { score: c => -c.score, new: c => -Date.parse(c.firstSeen), drop: c => -c.drop, mk: c => c.market ? c.market.diff : 99 }[sort];
+  cs.sort((a, b) => key(a) - key(b));
+  $('stat').textContent = `顯示 ${cs.length} 筆｜有競爭力 ${data.totals.hot}（同體系已有 ${data.totals.blocked}）｜追蹤中 ${data.totals.groups} 案`;
+  $('list').innerHTML = cs.length ? cs.slice(0, 300).map(card).join('') : '<div class="empty">沒有符合的案件</div>';
+}
+
+function card(c) {
+  const tags = (c.isNew ? ['新'] : []).concat(c.tags).concat(c.sameSystem ? ['同體系'] : []);
+  const hi = Math.max(...c.sources.flatMap(s => (s.hist || []).map(h => h[1])), c.price || 0);
+  const mk = c.market ? `<div class="mk">實登 ${c.market.level === 'community' ? '同社區' : c.market.level === 'similar' ? '相近物件' : '同區'}中位 ${c.market.median} 萬/坪（${c.market.n} 筆），本案 ${c.unitPrice ?? '—'} → <b class="${c.market.diff < 0 ? 'lo' : 'hi'}">${c.market.diff > 0 ? '+' : ''}${c.market.diff}%</b></div>` : '';
+  const blk = c.sameSystem ? `<div class="blk">⚠ 同體系 ${c.sameSystem.storeCount} 間店已有（比對可信度：${c.sameSystem.level}）<a href="${esc(c.sameSystem.url)}" target="_blank" rel="noopener">看永慶頁</a></div>` : '';
+  return `<div class="card${c.sameSystem ? ' blocked' : ''}">
+    <img loading="lazy" src="${esc(c.photo)}" alt="" onerror="this.style.visibility='hidden'">
+    <div>
+      <div class="top"><div class="ttl">${esc(c.title || c.community || c.address)}</div><div class="score">${c.score}</div></div>
+      <div class="tags">${tags.map(t => `<span class="tag t-${t}">${t}</span>`).join('')}</div>
+      <div class="price">${c.price ?? '—'} 萬${hi > c.price ? `<s>${hi} 萬</s>` : ''} <span class="meta">${c.drop ? `降 ${c.drop}%` : ''}</span></div>
+      <div class="meta">${esc(c.district)}｜${esc(c.community || c.address)}｜${c.area ?? '—'} 坪｜${esc(c.floor || '—')}｜${c.age != null && c.age !== '' ? esc(c.age) + (String(c.age).includes('年') ? '' : ' 年') : '屋齡—'}｜${esc(c.layout || c.type || '')}</div>
+      ${mk}
+      <div class="srcs">${c.sources.map(s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.s)} ${s.price ?? ''}${s.agent ? '・' + esc(s.agent.replace(/^仲介/, '')) : ''}</a>`).join('')}</div>
+      <div class="why">首次看到 ${ago(c.firstSeen)}｜${esc(c.why.join('、'))}</div>
+      ${blk}
+    </div></div>`;
+}
+
+$('tagbar').innerHTML = TAGS.map(t => `<button class="chip${t === tag ? ' on' : ''}" data-t="${t}">${t}</button>`).join('');
+$('tagbar').onclick = e => { const t = e.target.dataset.t; if (!t) return; tag = t;
+  [...$('tagbar').children].forEach(b => b.classList.toggle('on', b.dataset.t === t)); render(); };
+['dist', 'sort', 'showBlk'].forEach(id => $(id).onchange = render);
+$('q').oninput = render;
+
+fetch('data.json?t=' + Date.now()).then(r => r.json()).then(j => {
+  data = j;
+  $('upd').textContent = `更新 ${ago(j.generatedAt)}・同體系清單 ${ago(j.sameSystem.at)}`;
+  $('dist').innerHTML += (j.districts || []).map(d => `<option>${esc(d)}</option>`).join('');
+  render();
+}).catch(e => { $('list').innerHTML = `<div class="empty">資料讀取失敗：${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>
