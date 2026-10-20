@@ -1,0 +1,23 @@
+name = "case-radar"
+main = "src/worker.js"
+compatibility_date = "2024-11-01"
+
+# 網頁靜態檔；API 與分享頁由 worker 處理
+[assets]
+directory = "./public"
+binding = "ASSETS"
+not_found_handling = "none"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "radar-db"
+database_id = "000e10e8-eb72-4107-b0db-49c48cff0809"
+
+# 大檔：案件清單、案件池、爬蟲追蹤狀態（gzip 後存）
+[[kv_namespaces]]
+binding = "BLOBS"
+id = "fc5452382a434781bd34f14903e5c99a"
+
+# 秘密值用 `npx wrangler secret put`：
+#   INGEST_KEY  GitHub Actions 上傳資料用
+#   SETUP_CODE  第一次建立管理者帳號用

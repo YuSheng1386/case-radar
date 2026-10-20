@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>精選物件</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+.hero{padding:18px 16px 4px;max-width:720px;margin:0 auto}
+.hero h1{font-size:20px;margin:0 0 4px}
+.it{background:var(--card);border:1px solid var(--line);border-radius:12px;margin:0 0 14px;overflow:hidden}
+.it img{width:100%;aspect-ratio:4/3;object-fit:cover;background:var(--chip);display:block}
+.it .b{padding:12px 14px}
+.it h2{font-size:16px;margin:0 0 4px}
+.facts{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:8px 0;font-size:13px}
+.facts div{background:var(--chip);border-radius:6px;padding:6px 8px}
+.facts b{display:block;font-size:14.5px}
+.acts{display:flex;gap:8px;margin-top:10px}
+.acts button{flex:1;padding:9px 0;font-size:15px}
+.acts button.on-liked{background:#fde3d8;border-color:#e8a68c}
+.acts button.on-visit_req{background:#dcfce7;border-color:#86d19b}
+.acts button.on-disliked{background:var(--chip);border-color:var(--mut)}
+.why{margin-top:10px;display:none}
+.why.show{display:block}
+.why .chips{flex-wrap:wrap}
+.done{font-size:13px;color:var(--ok);margin-top:6px;min-height:18px}
+main{max-width:720px}
+</style>
+</head>
+<body>
+<div class="hero"><h1 id="title">精選物件</h1><div class="meta" id="sub"></div></div>
+<main id="list"><div class="empty">載入中…</div></main>
+<div class="toast" id="toast"></div>
+<script src="/match.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const token = location.pathname.split('/').pop();
+function toast(m) { const t = $('#toast'); t.textContent = m; t.classList.add('on'); setTimeout(() => t.classList.remove('on'), 1800); }
+
+const LOCKED = ['booked', 'visited', 'offer'];
+const LOCK_LABEL = { booked: '已約好看屋', visited: '已看過', offer: '洽談中' };
+
+fetch(`/api/share/${token}`).then(r => r.json()).then(d => {
+  if (d.error) { $('#list').innerHTML = `<div class="empty">${esc(d.error)}</div>`; return; }
+  document.title = d.title || '精選物件';
+  $('#title').textContent = d.title || '精選物件';
+  $('#sub').textContent = `${d.from ? d.from + ' 為您挑選・' : ''}共 ${d.items.length} 件。看完每一件按一下「喜歡／不喜歡／想去看」，我們會依您的回饋再找更準的。`;
+  $('#list').innerHTML = d.items.map(it => `<div class="it" data-id="${esc(it.id)}">
+    ${it.ph ? `<img loading="lazy" src="${esc(it.ph)}" alt="" onerror="this.remove()">` : ''}
+    <div class="b"><h2>${esc(it.c || it.t || it.a)}</h2>
+      <div class="meta">${esc(it.d || '')}・${esc(it.a || '')}${it.ty ? '・' + esc(it.ty) : ''}</div>
+      <div class="facts"><div>總價<b>${it.p ?? '—'} 萬</b></div><div>權狀<b>${it.ar ?? '—'} 坪</b></div><div>單價<b>${it.up ?? '—'} 萬</b></div>
+        <div>格局<b>${esc(it.ly || '—')}</b></div><div>樓層<b>${esc(it.fl || '—')}</b></div><div>屋齡<b>${it.ag != null && it.ag !== '' ? esc(it.ag) + ' 年' : '—'}</b></div></div>
+      ${LOCKED.includes(it.status) ? `<div class="done">✓ ${LOCK_LABEL[it.status]}</div>` : `
+      <div class="acts">
+        <button data-r="like" class="${it.status === 'liked' ? 'on-liked' : ''}">❤ 喜歡</button>
+        <button data-r="visit" class="${it.status === 'visit_req' ? 'on-visit_req' : ''}">🏠 想去看</button>
+        <button data-r="dislike" class="${it.status === 'disliked' ? 'on-disliked' : ''}">不喜歡</button>
+      </div>
+      <div class="why"><div class="meta">哪裡不喜歡？（可複選）</div>
+        <div class="chips">${Match.DISLIKE_REASONS.map(r => `<span class="chip${(it.reasons || '').split(',').includes(r) ? ' on' : ''}" data-reason="${r}">${r}</span>`).join('')}</div>
+        <textarea placeholder="想補充的話（選填）">${it.status === 'disliked' ? esc(it.note || '') : ''}</textarea>
+        <div class="row-btns"><button class="pri" data-send>送出</button></div></div>
+      <div class="done">${it.status === 'liked' ? '已標記喜歡' : it.status === 'visit_req' ? '已收到，我們會跟您約時間' : it.status === 'disliked' ? '已收到，謝謝您的回饋' : ''}</div>`}
+    </div></div>`).join('');
+}).catch(() => { $('#list').innerHTML = '<div class="empty">讀取失敗，請稍後再試</div>'; });
+
+async function send(card, reaction, reasons = [], note = '') {
+  const r = await fetch(`/api/share/${token}/react`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ item_id: card.dataset.id, reaction, reasons, note }) });
+  if (!r.ok) { toast('送出失敗，請再試一次'); return false; }
+  return true;
+}
+
+$('#list').addEventListener('click', async e => {
+  const card = e.target.closest('.it'); if (!card) return;
+  const why = card.querySelector('.why');
+  if (e.target.dataset.reason) { e.target.classList.toggle('on'); return; }
+  const r = e.target.dataset.r;
+  if (r === 'dislike') { why.classList.toggle('show'); return; }
+  if (r === 'like' || r === 'visit') {
+    if (await send(card, r)) {
+      card.querySelectorAll('.acts button').forEach(b => b.className = '');
+      e.target.className = r === 'like' ? 'on-liked' : 'on-visit_req';
+      why.classList.remove('show');
+      card.querySelector('.done').textContent = r === 'like' ? '已標記喜歡' : '已收到，我們會跟您約時間';
+      toast(r === 'like' ? '已標記喜歡' : '已收到看屋需求');
+    }
+  }
+  if (e.target.hasAttribute('data-send')) {
+    const reasons = [...why.querySelectorAll('.chip.on')].map(x => x.dataset.reason);
+    if (await send(card, 'dislike', reasons, why.querySelector('textarea').value)) {
+      card.querySelectorAll('.acts button').forEach(b => b.className = '');
+      card.querySelector('[data-r=dislike]').className = 'on-disliked';
+      why.classList.remove('show');
+      card.querySelector('.done').textContent = '已收到，謝謝您的回饋';
+    }
+  }
+});
+</script>
+</body>
+</html>

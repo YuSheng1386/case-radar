@@ -3,8 +3,8 @@ name: 案件雷達
 on:
   schedule:
     # 台灣時間 = UTC+8
-    - cron: '30 20 * * *'                        # 04:30 完整更新（全平台＋同體系 7 店＋實登）
-    - cron: '0 23,1,3,5,7,9,11,13,15 * * *'      # 07:00–23:00 每 2 小時快速更新（591）
+    - cron: '30 20 * * *'                        # 04:30 完整更新（全平台＋同體系店家＋實登）
+    - cron: '0 23,1,3,5,7,9,11,13,15 * * *'      # 07:00–23:00 每 2 小時快速更新（591 增量＋全市關鍵字）
   workflow_dispatch:
     inputs:
       mode:
@@ -12,9 +12,7 @@ on:
         default: 'quick'
 
 permissions:
-  contents: write
-  pages: write
-  id-token: write
+  contents: read
 
 concurrency:
   group: radar
@@ -24,25 +22,18 @@ jobs:
   run:
     runs-on: ubuntu-latest
     timeout-minutes: 100
-    environment:
-      name: github-pages
-      url: ${{ steps.deploy.outputs.page_url }}
+    env:
+      RADAR_URL: ${{ secrets.RADAR_URL }}
+      INGEST_KEY: ${{ secrets.INGEST_KEY }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: 取回追蹤狀態（data 分支）
-        run: |
-          if git ls-remote --exit-code origin data >/dev/null; then
-            git fetch --depth 1 origin data
-            mkdir -p state && git --work-tree=state checkout origin/data -- . && git reset -q
-          else
-            echo "第一次執行，沒有 data 分支"
-          fi
-          ls -la state || true
-
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+
+      # 追蹤狀態與結果都存在 Cloudflare（要登入才看得到），不放在公開的 GitHub
+      - name: 取回追蹤狀態
+        run: node tools/sync.js pull
 
       - name: 執行雷達
         env:
@@ -51,18 +42,5 @@ jobs:
           RADAR_MODE: ${{ (github.event.schedule == '30 20 * * *' || inputs.mode == 'full') && 'full' || 'quick' }}
         run: node run.js
 
-      - name: 存回追蹤狀態（只留一個 commit）
-        run: |
-          cd state
-          git init -q -b data
-          git config user.name radar-bot
-          git config user.email radar-bot@users.noreply.github.com
-          git add -A && git commit -qm "state $(date -u +%FT%TZ)"
-          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data
-
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: docs
-      - id: deploy
-        uses: actions/deploy-pages@v4
+      - name: 上傳到網站
+        run: node tools/sync.js push

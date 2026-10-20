@@ -28,6 +28,13 @@ const save = (f, d) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.
 const TRUST = ['信義', '永慶', '住商', '東森', '5168', '591'];
 const trustRank = s => { const i = TRUST.indexOf(s); return i < 0 ? 99 : i; };
 
+// 網址可用的穩定 id：平台代碼＋平台物件編號（591 與 591全市 是同一個編號空間）
+const SRC_CODE = { '591': 'a', '591全市': 'a', '5168': 'f', '信義': 's', '住商': 'h', '東森': 'e' };
+const stableId = m => {
+  const src = m._key.slice(0, m._key.length - String(m.sourceId).length - 1);
+  return `${SRC_CODE[src] || 'x'}-${String(m.sourceId).replace(/[^\w-]/g, '')}`;
+};
+
 function loadConfig() {
   const cfg = load(path.join(ROOT, 'config.json'), {});
   // 店家清單可放 GitHub Secret（EXCLUDED_STORES，JSON 陣列），不進公開程式碼
@@ -168,6 +175,7 @@ async function main() {
 
   const cards = [];
   const blocked = [];
+  const pool = [];
   for (const g of groups) {
     const ms = g.members.slice().sort((a, b) => trustRank(a.source) - trustRank(b.source));
     const pick = f => (ms.find(m => m[f] != null && m[f] !== '') || {})[f];
@@ -200,20 +208,32 @@ async function main() {
     if (agentCount >= 5) { score -= 5; why.push(`${agentCount}位仲介在刊-5`); }
     // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；屋主刊登的都列
     const hot = score >= (cfg.minScore ?? 20) || owner;
-    if (!hot) continue;
 
-    const first = ms.map(m => m._first).sort()[0];
+    // 穩定 id：最早看到的那筆（後來別的平台加入合併，id 也不會變 → 開發進度、客戶紀錄不會斷）
+    const firstM = ms.slice().sort((a, b) => (a._first || '').localeCompare(b._first || '') || a._key.localeCompare(b._key))[0];
+    const id = stableId(firstM);
+    const first = firstM._first;
     const m = core.matchSameSystem(rep, storeIdx);
+
+    // 案件池（給客需配對）：所有在架物件，精簡欄位
+    pool.push({ id, t: rep.title, d: rep.district, a: rep.address, c: rep.community, p: rep.price, up: rep.unitPrice,
+      ar: rep.area, fl: rep.floor, ag: rep.age, ly: rep.layout, ty: rep.type, ph: rep.photo,
+      u: (ms.find(x => x.source !== '591') || ms[0]).url, s: [...new Set(ms.map(x => x.source))],
+      sc: score, tg: [...tags], cm: cm ? cm.diff : null, same: m ? 1 : 0, f: first, own: owner ? (ownerOnly ? 2 : 1) : 0,
+      // 車位：591 有欄位；其他平台不知道 → null（配對時「要車位」不會因此被刷掉）
+      pk: ms.some(x => x.hasCarport) ? 1 : ms.some(x => x.source === '591') ? 0 : null });
+
+    if (!hot) continue;
     // 同體系店家已有 → 不能開發，關鍵字再好也一樣；另列一份給人工抽查比對有沒有誤判
     // 網頁是公開的：只放店數與可信度，不放店家電話
     if (m) {
-      blocked.push({ id: ms[0]._key, title: rep.title, district: rep.district, address: rep.address, community: rep.community,
+      blocked.push({ id, title: rep.title, district: rep.district, address: rep.address, community: rep.community,
         price: rep.price, area: rep.area, floor: rep.floor, tags: [...tags], level: m.level, storeCount: m.storeCount,
         ycUrl: m.url, url: ms[0].url });
       continue;
     }
     cards.push({
-      id: ms[0]._key, ...rep, tags: [...tags], score, why, drop,
+      id, ...rep, tags: [...tags], score, why, drop,
       market: mk && { median: mk.median, diff: mk.diff, n: mk.count, level: mk.matchLevel },
       comm: cm && { med: cm.med, n: cm.n, min: cm.min, diff: cm.diff, belowMin: cm.belowMin, recent: cm.recent,
         url: `https://market.591.com.tw/${commId}` },
@@ -238,6 +258,7 @@ async function main() {
     blocked
   };
   save(OUT, out);
+  save(path.join(ROOT, 'docs', 'pool.json'), { generatedAt: now, districts: cfg.districts, items: pool });
   tracker.runs = [runLog, ...(tracker.runs || [])].slice(0, 50);
   save(F.tracker, tracker);
   console.log(`完成：在架 ${active.length} → 去重 ${groups.length} → 有競爭力可開發 ${cards.length}（同體系已有、排除 ${blocked.length}）`);

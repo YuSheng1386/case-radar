@@ -2,3 +2,9 @@ state/
 stores.local.json
 docs/data.json
 node_modules/
+web/node_modules/
+web/.wrangler/
+web/.dev.vars
+docs/pool.json
+web/.setup-code.txt
+web/.ingest-key
