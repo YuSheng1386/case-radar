@@ -31,10 +31,18 @@ const H = { 'X-Ingest-Key': INGEST_KEY || '' };
 function hashPrefs(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) | 0; return String(h); }
 
 const ownerOnly = c => c.posters && c.posters.owner && c.posters.agents === 0;
+// 每件一行：分數＋物件，下一行列出「為什麼值得看」的全部理由（用戶 10/21：不要只貼一個標籤像在分類）
 const cardLine = c => {
-  const tag = ownerOnly(c) ? '只有屋主' : c.peer && c.peer.diff < 0 ? `同等級低${-c.peer.diff}%` : (c.tags || []).slice(0, 2).join('/');
+  const why = [];
+  if (ownerOnly(c)) why.push('只有屋主在賣');
+  else if (c.posters && c.posters.owner) why.push(`屋主＋${c.posters.agents}位仲介`);
+  if (c.peer && c.peer.diff < 0) why.push(`比同等級社區低${-c.peer.diff}%`);
+  if (c.comm && c.comm.diff < 0) why.push(`開價比同社區成交低${-c.comm.diff}%`);
+  if (c.drop >= 2) why.push(`降價${c.drop}%`);
+  // 自售／低於實登／同等級仍低 上面已寫成具體數字；降價有實測降幅時也已寫過
+  for (const t of c.tags || []) if (!['自售', '低於實登', '同等級仍低', '降價'].includes(t) || (t === '降價' && !(c.drop >= 2))) why.push(t === '標低於行情' ? '標示低於行情' : t);
   const url = (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9))[0]?.url || '';
-  return `・${tag}｜${c.district}${c.community || c.title.slice(0, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}（${c.score}分）\n  ${url}`;
+  return `・${c.score}分｜${c.district} ${c.community || c.title.slice(0, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}\n  ${[...new Set(why)].join('・') || '分數高'}\n  ${url}`;
 };
 
 async function lineQuota() {
@@ -117,11 +125,11 @@ async function main() {
   st.init = st.init || now;
   if (!pc.length && !pcl.length) { st.pending.cards = []; return save(st); }
 
-  pc.sort((a, b) => ownerOnly(b) - ownerOnly(a) || b.score - a.score);
+  pc.sort((a, b) => b.score - a.score); // 只照分數排（只有屋主在賣已在分數裡加權），不分組
   const t = twNow();
   let msg = `🏠 案件雷達 ${t.getUTCMonth() + 1}/${t.getUTCDate()} ${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}\n`;
   if (pc.length) {
-    msg += `\n【新的可開發】${pc.length} 件（只有屋主 ${pc.filter(ownerOnly).length}）\n` + pc.slice(0, 8).map(cardLine).join('\n');
+    msg += `\n【新的可開發】${pc.length} 件\n` + pc.slice(0, 8).map(cardLine).join('\n');
     if (pc.length > 8) msg += `\n…另 ${pc.length - 8} 件`;
     msg += '\n';
   }
@@ -159,4 +167,5 @@ async function main() {
 
 function save(st) { fs.mkdirSync(STATE, { recursive: true }); fs.writeFileSync(F, JSON.stringify(st)); }
 
-main().catch(e => { console.error('[通知] 失敗（不影響雷達）:', e.message); });
+if (require.main === module) main().catch(e => { console.error('[通知] 失敗（不影響雷達）:', e.message); });
+module.exports = { cardLine };
