@@ -6,7 +6,7 @@
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITER = 20000;
-const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+)$/;
+const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7])$/;
 const CLIENT_STATUSES = ['sent', 'liked', 'disliked', 'visit_req', 'booked', 'visited', 'offer', 'dropped'];
 const DEV_STATUSES = ['未聯絡', '已聯絡', '約見面', '簽委託', '放棄'];
 
@@ -109,6 +109,19 @@ async function api(req, env, url, p, m) {
       env.DB.prepare('SELECT ci.client_id, ci.item_id, ci.status, ci.reasons, ci.snapshot FROM client_items ci JOIN clients c ON c.id = ci.client_id WHERE c.active = 1')
     ]);
     return json({ clients: cs.results, items: its.results });
+  }
+  // 每週備份（tools/backup.js 在 Actions 加密後存回 KV backup-w0..7 輪替）：客戶相關資料，不含密碼雜湊與登入狀態
+  if (p === '/api/ingest/backup' && m === 'GET') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const T = ['clients', 'client_items', 'shares', 'dev_status', 'same_override', 'match_alerts'];
+    const rs = await env.DB.batch([...T.map(t => env.DB.prepare(`SELECT * FROM ${t}`)),
+      env.DB.prepare('SELECT id, username, name, role, active, created_at FROM users')]);
+    return json({ at: new Date().toISOString(), tables: Object.fromEntries([...T, 'users'].map((t, i) => [t, rs[i].results])) });
+  }
+  // 雷達讀「同體系比對錯了」清單（只有案件 id，沒有個資）
+  if (p === '/api/ingest/overrides' && m === 'GET') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    return json((await env.DB.prepare('SELECT item_id FROM same_override').all()).results.map(x => x.item_id));
   }
   if (p === '/api/ingest/alerts' && m === 'POST') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
@@ -232,19 +245,66 @@ async function api(req, env, url, p, m) {
   // ----- 開發進度（大家共用）-----
   if (p === '/api/dev' && m === 'GET') {
     const rows = (await env.DB.prepare(
-      `SELECT d.item_id, d.status, d.note, d.updated_at, u.name AS by_name, d.user_id FROM dev_status d JOIN users u ON u.id = d.user_id`
+      `SELECT d.item_id, d.status, d.note, d.updated_at, d.next_contact, d.snapshot, u.name AS by_name, d.user_id FROM dev_status d JOIN users u ON u.id = d.user_id`
     ).all()).results;
     return json(rows);
   }
   if ((r = p.match(/^\/api\/dev\/([\w-]+)$/)) && m === 'PUT') {
     const b = await body(req);
-    if (!DEV_STATUSES.includes(b.status)) return err('bad status');
+    if (b.status && !DEV_STATUSES.includes(b.status)) return err('bad status');
+    const next = /^\d{4}-\d{2}-\d{2}$/.test(b.next_contact || '') ? b.next_contact : '';
     await env.DB.prepare(
-      `INSERT INTO dev_status (item_id, status, user_id, note, snapshot) VALUES (?, ?, ?, ?, ?)
+      `INSERT INTO dev_status (item_id, status, user_id, note, snapshot, next_contact) VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(item_id) DO UPDATE SET status = excluded.status, user_id = excluded.user_id, note = excluded.note,
-       snapshot = excluded.snapshot, updated_at = datetime('now')`
-    ).bind(r[1], b.status, user.id, String(b.note || '').slice(0, 1000), JSON.stringify(b.snapshot || {})).run();
+       snapshot = excluded.snapshot, next_contact = excluded.next_contact, updated_at = datetime('now')`
+    ).bind(r[1], b.status || '未聯絡', user.id, String(b.note || '').slice(0, 1000), JSON.stringify(b.snapshot || {}), next).run();
     return json({ ok: true });
+  }
+
+  // ----- 地標定位（客需通勤距離）：①內政部 NLSC 門牌定位 ②OSM Nominatim（學校、公司名稱等）-----
+  //   回傳候選讓仲介確認（NLSC 會模糊比對到隔壁路，畫面上顯示定位到的地址）
+  if (p === '/api/geocode' && m === 'POST') {
+    const b = await body(req);
+    let q = String(b.q || '').trim().slice(0, 80);
+    if (!q) return err('請輸入地址或地標');
+    const out = [];
+    const full = /^(臺|台)中市/.test(q) ? q.replace(/^台中市/, '臺中市') : '臺中市' + q;
+    try {
+      const xml = await (await fetch(`https://api.nlsc.gov.tw/MapSearch/QuerySearch?word=${encodeURIComponent(full)}&feedback=XML`,
+        { headers: { Referer: 'https://maps.nlsc.gov.tw/', 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) })).text();
+      for (const it of xml.split('<ITEM>').slice(1, 6)) {
+        const c = (it.match(/<CONTENT>([^<]*)/) || [])[1], loc = (it.match(/<LOCATION>([^<]*)/) || [])[1];
+        if (!c || !loc || !/^臺中市/.test(c)) continue;   // 驗縣市（別縣市也有同名區）
+        const [lng, lat] = loc.split(',').map(Number);
+        if (lat && lng) out.push({ label: c, lat, lng, src: '內政部' });
+      }
+    } catch {}
+    if (!out.length) {
+      try {
+        const j = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=3&countrycodes=tw&q=${encodeURIComponent(q.replace(/^(臺|台)中市/, '') + ' 臺中市')}`,
+          { headers: { 'User-Agent': 'case-radar/1.0 (yusheng1386 real-estate tool)' }, signal: AbortSignal.timeout(6000) })).json();
+        for (const x of j) out.push({ label: x.display_name, lat: +x.lat, lng: +x.lon, src: 'OpenStreetMap' });
+      } catch {}
+    }
+    return json(out);
+  }
+
+  // ----- 同體系比對錯了（大家共用）：標了之後雷達下次跑會把該案改回可開發 -----
+  if (p === '/api/same-override' && m === 'GET') {
+    return json((await env.DB.prepare('SELECT o.item_id, o.note, o.created_at, u.name AS by_name FROM same_override o JOIN users u ON u.id = o.user_id').all()).results);
+  }
+  if ((r = p.match(/^\/api\/same-override\/([\w-]+)$/))) {
+    if (m === 'PUT') {
+      const b = await body(req);
+      await env.DB.prepare(`INSERT INTO same_override (item_id, user_id, note, snapshot) VALUES (?, ?, ?, ?)
+        ON CONFLICT(item_id) DO UPDATE SET user_id = excluded.user_id, note = excluded.note`)
+        .bind(r[1], user.id, String(b.note || '').slice(0, 300), JSON.stringify(b.snapshot || {})).run();
+      return json({ ok: true });
+    }
+    if (m === 'DELETE') {
+      await env.DB.prepare('DELETE FROM same_override WHERE item_id = ?').bind(r[1]).run();
+      return json({ ok: true });
+    }
   }
 
   // ----- 客戶 -----

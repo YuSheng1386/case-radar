@@ -98,6 +98,13 @@ function srcLinks(c) {
 }
 
 function mkLine(c) {
+  return peerLine(c) + bargainLine(c) + mkLine0(c);
+}
+// 嚴格版：1.5 km 內同等級社區（單價差 10% 內）同房數、坪數相近的近 2 年成交
+const peerLine = c => c.peer ? `<div class="mk">同等級社區（${c.peer.comms} 個社區 ${c.peer.n} 筆，1.5 km 內、近 2 年、同房數）成交中位 ${c.peer.med} 萬/坪 → <b class="${c.peer.diff < 0 ? 'lo' : 'hi'}">${sign(c.peer.diff)}</b>${c.peer.diff < 0 ? ' <b class="lo">同等級比較仍低</b>' : ''}</div>` : '';
+// 成交回填：雷達追蹤到下架、之後在實登找到成交的「最後開價 vs 成交價」
+const bargainLine = c => c.bargain ? `<div class="mk">本社區議價空間：開價→成交 中位 <b>${c.bargain.med}%</b>（${c.bargain.n} 筆實際成交）</div>` : '';
+function mkLine0(c) {
   if (c.comm) return `<div class="mk">開價 ${c.unitPrice} 萬/坪 vs <a href="${esc(c.comm.url)}" target="_blank" rel="noopener">同社區</a>近3年成交中位 ${c.comm.med}（${c.comm.n} 筆，最低 ${c.comm.min}）→ <b class="${c.comm.diff < 0 ? 'lo' : 'hi'}">${sign(c.comm.diff)}</b>${c.comm.belowMin ? ' <b class="lo">低於最低成交</b>' : ''}</div>`;
   if (c.market) return `<div class="mk">實登${c.market.level === 'similar' ? '相近物件' : '同區'}中位 ${c.market.median} 萬/坪（${c.market.n} 筆），本案 ${c.unitPrice ?? '—'} → <b class="${c.market.diff < 0 ? 'lo' : 'hi'}">${sign(c.market.diff)}</b> <span class="meta">（實登已扣車位，僅供參考）</span></div>`;
   return '';
@@ -109,9 +116,10 @@ const metaLine = c => `${esc(c.district)}｜${esc(c.community || c.address)}｜$
 const DEV = { tag: '全部', scope: '', dist: '', sort: 'score', st: '', q: '', pmin: '', pmax: '', ownerOnly: false };
 async function viewDev() {
   $('#main').innerHTML = '<div class="empty">載入案件…</div>';
-  const [data, devRows] = await Promise.all([blob('cards'), api('/api/dev')]);
+  const [data, devRows, ovRows] = await Promise.all([blob('cards'), api('/api/dev'), api('/api/same-override')]);
   const dev = Object.fromEntries(devRows.map(r => [r.item_id, r]));
-  const TAGS = ['全部', '新上架', '低於實登', '賠售', '標低於行情', '急售', '超值', '自售', '降價'];
+  const ov = Object.fromEntries(ovRows.map(r => [r.item_id, r]));
+  const TAGS = ['全部', '新上架', '同等級仍低', '低於實登', '賠售', '標低於行情', '急售', '超值', '自售', '降價'];
   const cnt = {}; data.cards.forEach(c => c.district && (cnt[c.district] = (cnt[c.district] || 0) + 1));
   const dists = [...(data.districts || []).filter(d => cnt[d]), ...Object.keys(cnt).filter(d => !(data.districts || []).includes(d)).sort((a, b) => cnt[b] - cnt[a])];
 
@@ -126,7 +134,18 @@ async function viewDev() {
       <label><input type="checkbox" id="own"> 只看屋主自售</label>
       <input id="q" type="search" placeholder="社區／路名／標題" style="flex:1;min-width:120px">
     </div>
-    <div class="stat" id="stat"></div><div id="list"></div>`;
+    <div class="stat" id="stat"></div><div id="due"></div><div id="list"></div>`;
+  drawDue();
+  // 今天（含過期）要聯絡的：簽委託／放棄的不列
+  function drawDue() {
+    const today = new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+    const due = Object.values(dev).filter(d => d.next_contact && d.next_contact <= today && !['簽委託', '放棄'].includes(d.status))
+      .sort((a, b) => a.next_contact.localeCompare(b.next_contact));
+    $('#due').innerHTML = due.length ? `<div class="panel"><h2>今天要聯絡（${due.length}）</h2>${due.map(d => {
+      const c = data.cards.find(x => x.id === d.item_id); let s = {}; try { s = JSON.parse(d.snapshot || '{}'); } catch {}
+      return `<div class="meta"><b>${esc(c?.title || s.community || s.title || s.address || d.item_id)}</b>｜${c?.price ?? s.price ?? '—'} 萬｜${esc(d.status)}｜${d.next_contact < today ? `<b class="hi">逾期 ${esc(d.next_contact)}</b>` : '今天'}｜${esc(d.by_name)}${d.note ? '｜' + esc(d.note) : ''}${c ? '' : '（已不在清單，可能下架）'}</div>`;
+    }).join('')}</div>` : '';
+  }
   for (const k of ['scope', 'dist', 'sort', 'st', 'q', 'pmin', 'pmax']) { $('#' + k).value = DEV[k]; $('#' + k).oninput = () => { DEV[k] = $('#' + k).value; draw(); }; }
   $('#own').checked = DEV.ownerOnly; $('#own').onchange = () => { DEV.ownerOnly = $('#own').checked; draw(); };
   $('#tags').onclick = e => { const t = e.target.dataset.t; if (!t) return; DEV.tag = t; [...$('#tags').children].forEach(x => x.classList.toggle('on', x.dataset.t === t)); draw(); };
@@ -139,15 +158,29 @@ async function viewDev() {
       (!DEV.pmin || c.price >= +DEV.pmin) && (!DEV.pmax || c.price <= +DEV.pmax) &&
       (!DEV.ownerOnly || (c.posters && c.posters.owner)) &&
       (!DEV.st || (DEV.st === 'none' ? !dev[c.id] : dev[c.id]?.status === DEV.st)));
-    const key = { score: c => -c.score, new: c => -Date.parse(c.firstSeen), drop: c => -c.drop, mk: c => c.comm ? c.comm.diff : c.market ? c.market.diff + 100 : 999 }[DEV.sort];
+    const key = { score: c => -c.score, new: c => -Date.parse(c.firstSeen), drop: c => -c.drop, mk: c => c.peer ? c.peer.diff - 100 : c.comm ? c.comm.diff : c.market ? c.market.diff + 100 : 999 }[DEV.sort];
     cs.sort((a, b) => key(a) - key(b));
     $('#stat').textContent = `顯示 ${cs.length} 筆｜可開發 ${data.totals.hot}｜同體系已有、排除 ${data.totals.blocked}｜追蹤 ${data.totals.groups} 案｜資料更新 ${ago(data.generatedAt)}`;
     $('#list').innerHTML = (cs.length ? cs.slice(0, 200).map(c => devCard(c, dev[c.id])).join('') : '<div class="empty">沒有符合的案件</div>')
-      + (cs.length > 200 ? `<div class="empty">只顯示前 200 筆，請用篩選縮小範圍</div>` : '') + blockedList(data);
+      + (cs.length > 200 ? `<div class="empty">只顯示前 200 筆，請用篩選縮小範圍</div>` : '') + blockedList(data, ov);
   }
   $('#list').onchange = async e => {
-    const row = e.target.closest('.devrow'); if (!row || e.target.tagName !== 'SELECT') return;
-    await saveDev(row, data, dev);
+    const row = e.target.closest('.devrow'); if (!row || !(e.target.tagName === 'SELECT' || e.target.type === 'date')) return;
+    await saveDev(row, data, dev); drawDue();
+  };
+  // 同體系「比對錯了」／復原
+  $('#list').onclick = async e => {
+    const btn = e.target.closest('[data-ov]'); if (!btn) return;
+    const id = btn.dataset.ov; const b = (data.blocked || []).find(x => x.id === id);
+    try {
+      if (ov[id]) { await api(`/api/same-override/${id}`, { method: 'DELETE' }); delete ov[id]; toast('已復原：維持同體系排除'); }
+      else {
+        const note = prompt('哪裡不一樣？（例：樓層不同、不同戶）', ''); if (note == null) return;
+        await api(`/api/same-override/${id}`, { method: 'PUT', body: { note, snapshot: { title: b?.title, address: b?.address, price: b?.price } } });
+        ov[id] = { note, by_name: ME.name }; toast('已標比對錯，雷達下次更新後改回可開發');
+      }
+      draw();
+    } catch (x) { toast(x.message); }
   };
   $('#list').onkeydown = async e => { if (e.key === 'Enter' && e.target.closest('.devrow')) await saveDev(e.target.closest('.devrow'), data, dev); };
   draw();
@@ -155,10 +188,12 @@ async function viewDev() {
 
 async function saveDev(row, data, dev) {
   const id = row.dataset.id; const c = data.cards.find(x => x.id === id);
-  const status = row.querySelector('select').value; const note = row.querySelector('input').value;
+  const status = row.querySelector('select').value || '未聯絡'; const note = row.querySelector('[data-note]').value;
+  const next_contact = row.querySelector('[data-next]').value;
   try {
-    await api(`/api/dev/${id}`, { method: 'PUT', body: { status, note, snapshot: { title: c.title, address: c.address, price: c.price, community: c.community } } });
-    dev[id] = { ...(dev[id] || {}), status, note, by_name: ME.name, updated_at: new Date().toISOString() };
+    const snapshot = { title: c.title, address: c.address, price: c.price, community: c.community };
+    await api(`/api/dev/${id}`, { method: 'PUT', body: { status, note, next_contact, snapshot } });
+    dev[id] = { ...(dev[id] || {}), item_id: id, status, note, next_contact, snapshot: JSON.stringify(snapshot), by_name: ME.name, updated_at: new Date().toISOString() };
     row.querySelector('.by').textContent = `${ME.name}・剛剛`;
     toast('已更新開發進度');
   } catch (e) { toast(e.message); }
@@ -175,16 +210,20 @@ function devCard(c, d) {
     <div class="srcs">${srcLinks(c)}</div>
     <div class="why">首次看到 ${ago(c.firstSeen)}｜${esc(c.why.join('、'))}</div>
     <div class="devrow" data-id="${esc(c.id)}">開發：<select class="st-${esc(d?.status || '')}">${['', ...DEV_ST].map(s => `<option ${d?.status === s ? 'selected' : ''} value="${s}">${s || '—'}</option>`).join('')}</select>
-      <input placeholder="備註（Enter 存）" value="${esc(d?.note || '')}"><span class="meta by">${d ? `${esc(d.by_name)}・${ago(d.updated_at)}` : ''}</span></div>
+      <input data-note placeholder="備註（Enter 存）" value="${esc(d?.note || '')}">
+      <label class="meta">下次聯絡 <input data-next type="date" value="${esc(d?.next_contact || '')}"></label><span class="meta by">${d ? `${esc(d.by_name)}・${ago(d.updated_at)}` : ''}</span></div>
   </div></div>`;
 }
 
-function blockedList(data) {
+function blockedList(data, ov = {}) {
   const bs = data.blocked || [];
   if (!bs.length) return '';
-  return `<details class="blkbox"><summary>同體系已有・不可開發（${bs.length}）— 點開抽查比對對不對</summary>${bs.slice(0, 300).map(b => `<div class="blkrow"><b>${esc(b.title || b.community || b.address)}</b>
+  const open = document.querySelector('.blkbox')?.open ? ' open' : '';
+  return `<details class="blkbox"${open}><summary>同體系已有・不可開發（${bs.length}）— 點開抽查比對對不對</summary>${bs.slice(0, 300).map(b => `<div class="blkrow"><b>${esc(b.title || b.community || b.address)}</b>
     <span class="meta">${esc(b.district)}｜${b.price ?? '—'} 萬｜${b.area ?? '—'} 坪｜${esc(b.floor || '—')}｜${b.storeCount} 店｜可信度 ${b.level}</span>
-    <a href="${esc(b.url)}" target="_blank" rel="noopener">刊登</a> <a href="${esc(b.ycUrl)}" target="_blank" rel="noopener">永慶</a></div>`).join('')}</details>`;
+    <a href="${esc(b.url)}" target="_blank" rel="noopener">刊登</a> <a href="${esc(b.ycUrl)}" target="_blank" rel="noopener">永慶</a>
+    ${ov[b.id] ? `<span class="pill">已標比對錯（${esc(ov[b.id].by_name || '')}${ov[b.id].note ? '：' + esc(ov[b.id].note) : ''}），下次更新改回可開發</span> <button class="sm" data-ov="${esc(b.id)}">復原</button>`
+      : `<button class="sm" data-ov="${esc(b.id)}">比對錯了</button>`}</div>`).join('')}</details>`;
 }
 
 // ================= 客戶列表 =================
@@ -261,6 +300,8 @@ async function viewClient(id) {
       (r.items.length > S.limit ? `<div class="row-btns"><button id="moreM">再多看 30 筆</button></div>` : '');
     if ($('#moreM')) $('#moreM').onclick = () => { S.limit += 30; drawMatch(); };
     $('#mlist').onclick = e => {
+      const bro = e.target.closest('[data-brochure]');
+      if (bro) return brochure(bro.dataset.brochure);
       const card = e.target.closest('.card'); if (!card || e.target.closest('a')) return;
       const iid = card.dataset.id; S.sel.has(iid) ? S.sel.delete(iid) : S.sel.add(iid);
       card.classList.toggle('sel'); card.querySelector('input[type=checkbox]').checked = S.sel.has(iid);
@@ -284,13 +325,22 @@ async function viewClient(id) {
   window._redrawMatch = drawMatch;
 }
 
+// 案件說明書目前是電腦上的程式（AI 挑照片、自繪格局要本機環境），先給可直接貼上的指令
+function brochure(id591) {
+  if (!id591) return alert('這個案子沒有 591 刊登，說明書目前只支援 591 物件。');
+  const cmd = `cd /home/YuSheng/仲介開發/案件說明書 && node 程式/make.js ${id591}`;
+  const done = () => toast('已複製指令，到電腦的 WSL 貼上執行，PDF 在 案件說明書/輸出/');
+  navigator.clipboard.writeText(cmd).then(done, () => prompt('在電腦的 WSL 執行這行（PDF 會在 案件說明書/輸出/）', cmd));
+}
+
 function matchCard(it, sel, fresh) {
   return `<div class="card${sel ? ' sel' : ''}" data-id="${esc(it.id)}" style="cursor:pointer"><img loading="lazy" src="${esc(it.ph)}" alt="" onerror="this.style.visibility='hidden'"><div>
     <div class="top-row"><div class="ttl"><input type="checkbox" ${sel ? 'checked' : ''} style="pointer-events:none"> ${esc(it.c || it.t || it.a)}</div><div class="score">${it.ms}</div></div>
     <div class="tags">${fresh ? '<span class="tag t-新">新配對</span>' : ''}${(it.tg || []).map(t => `<span class="tag t-${t}">${t}</span>`).join('')}${it.same ? '<span class="tag t-同體系">同體系物件</span>' : ''}</div>
-    <div class="price">${it.p ?? '—'} 萬 <span class="meta">${it.up ? it.up + ' 萬/坪' : ''}${it.cm != null ? `・比同社區實登 ${sign(it.cm)}` : ''}</span></div>
+    <div class="price">${it.p ?? '—'} 萬 <span class="meta">${it.up ? it.up + ' 萬/坪' : ''}${it.cm != null ? `・比同社區實登 ${sign(it.cm)}` : ''}${it.pd != null ? `・比同等級社區 ${sign(it.pd)}` : ''}</span></div>
     <div class="meta">${esc(it.d)}｜${esc(it.a)}｜${it.ar ?? '—'} 坪｜${esc(it.fl || '—')}｜${it.ag != null && it.ag !== '' ? esc(it.ag) + ' 年' : '屋齡—'}｜${esc(it.ly || it.ty || '')}</div>
-    <div class="why">${esc(it.why.join('、'))}｜<a href="${esc(it.u)}" target="_blank" rel="noopener">看刊登</a>｜${esc((it.s || []).join('、'))}</div>
+    <div class="why">${esc(it.why.join('、'))}｜<a href="${esc(it.u)}" target="_blank" rel="noopener">看刊登</a>｜${esc((it.s || []).join('、'))}
+      <button type="button" class="sm" data-brochure="${esc(it.a5 || '')}">產生說明書</button></div>
   </div></div>`;
 }
 
@@ -313,6 +363,11 @@ function prefsForm(c, p) {
     <div class="grid" style="margin-top:6px">${inp('districtsExclude', '排除的區（逗號）', (p.districtsExclude || []).join('、'))}
       ${inp('nearKeywords', '希望靠近的路段／地標（逗號）', (p.nearKeywords || []).join('、'), 'text', '例：文心路、大元國小')}
       ${inp('priceMin', '總價下限（萬）', p.priceMin, 'number')}${inp('priceMax', '總價上限（萬）', p.priceMax, 'number')}${inp('downPayment', '頭期款（萬）', p.downPayment, 'number')}</div>
+    <h3>通勤地標</h3><p class="meta">公司、學校、娘家…配對會顯示離最近地標的直線距離並納入排序；填「最遠」就把超過的篩掉。案件用社區座標，沒社區的案子距離不明。</p>
+    <div id="lms"></div><input type="hidden" name="landmarks" value="${esc(JSON.stringify(p.landmarks || []))}">
+    <div class="grid"><label>地址或地標<input id="lmq" placeholder="例：南屯區大業路105號、台中榮總"></label><label>叫它什麼<input id="lmn" placeholder="例：公司"></label>
+      <label>最遠（公里，可空）<input id="lmk" type="number" step="0.5" min="0"></label></div>
+    <div class="row-btns"><button type="button" id="lmadd">定位並加入</button></div><div id="lmc" class="meta"></div>
     <h3>物件條件</h3>${checks('types', Match.TYPES, p.types)}${checks('kinds', ['新成屋', '中古屋'], p.kinds)}
     <div class="grid" style="margin-top:6px">${inp('areaMin', '權狀坪數下限', p.areaMin, 'number')}${inp('areaMax', '權狀坪數上限', p.areaMax, 'number')}
       ${inp('roomsMin', '至少幾房', p.roomsMin, 'number')}${inp('bathsMin', '至少幾衛', p.bathsMin, 'number')}${inp('ageMax', '屋齡上限（年）', p.ageMax, 'number')}
@@ -342,6 +397,7 @@ function readPrefs() {
     else if (LIST_FIELDS.includes(k)) p[k] = String(v).split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean);
     else if (NUM_FIELDS.includes(k)) { if (v !== '') p[k] = +v; }
     else if (k === 'excludeSameSystem') p[k] = true;
+    else if (k === 'landmarks') { try { const v2 = JSON.parse(v); if (v2.length) p[k] = v2; } catch {} }
     else if (v !== '') p[k] = v;
   }
   return p;
@@ -354,6 +410,30 @@ function bindPrefs(c, prefs) {
     toast('客需已儲存'); window._redrawMatch && window._redrawMatch();
   };
   $('#preview').onclick = () => window._redrawMatch && window._redrawMatch();
+  // 通勤地標：輸入 → 定位（內政部門牌／OSM）→ 從候選挑一個確認
+  const lmInput = $('#pf').querySelector('[name=landmarks]');
+  const getLm = () => { try { return JSON.parse(lmInput.value); } catch { return []; } };
+  const setLm = v => { lmInput.value = JSON.stringify(v); drawLm(); window._redrawMatch && window._redrawMatch(); };
+  function drawLm() {
+    $('#lms').innerHTML = getLm().map((l, i) => `<div class="meta">📍 <b>${esc(l.name)}</b>：${esc(l.label)}${l.maxKm ? `（最遠 ${l.maxKm} km）` : ''} <button type="button" class="sm" data-lmdel="${i}">刪</button></div>`).join('');
+  }
+  drawLm();
+  $('#lms').onclick = e => { const i = e.target.dataset.lmdel; if (i == null) return; const v = getLm(); v.splice(+i, 1); setLm(v); };
+  $('#lmadd').onclick = async () => {
+    const q = $('#lmq').value.trim(); if (!q) return toast('先輸入地址或地標');
+    $('#lmc').textContent = '定位中…';
+    try {
+      const cs = await api('/api/geocode', { method: 'POST', body: { q } });
+      if (!cs.length) { $('#lmc').textContent = '找不到，換個寫法（門牌要含路名與號，例：南屯區大業路105號）'; return; }
+      $('#lmc').innerHTML = '定位到下面哪一個？' + cs.map((c, i) => `<div><button type="button" class="sm" data-lmpick="${i}">選這個</button> ${esc(c.label)} <span class="meta">（${esc(c.src)}）</span></div>`).join('');
+      $('#lmc').onclick = e => {
+        const i = e.target.dataset.lmpick; if (i == null) return;
+        const c = cs[+i];
+        setLm([...getLm(), { name: $('#lmn').value.trim() || q, label: c.label, lat: c.lat, lng: c.lng, maxKm: +$('#lmk').value || null }]);
+        $('#lmc').textContent = '已加入（記得按「儲存客需」）'; $('#lmq').value = $('#lmn').value = $('#lmk').value = '';
+      };
+    } catch (x) { $('#lmc').textContent = x.message; }
+  };
   $('#del').onclick = async () => {
     if (!confirm(`確定刪除客戶「${c.name}」？`)) return;
     await api(`/api/clients/${c.id}`, { method: 'DELETE' }); location.hash = 'clients';

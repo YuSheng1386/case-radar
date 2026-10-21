@@ -18,8 +18,11 @@ const F = {
   tracker: path.join(STATE, 'tracker.json'),
   ycList: path.join(STATE, 'yc-listings.json'),
   community: path.join(STATE, 'community.json'),
-  market: path.join(STATE, 'market-prices.json')
+  market: path.join(STATE, 'market-prices.json'),
+  peers: path.join(STATE, 'peers.json'),      // 同等級社區比較：社區列表＋各社區近 2 年成交
+  sold: path.join(STATE, 'sold.json')         // 下架案 → 之後成交的「最後開價 vs 成交價」
 };
+const peers = require('./lib/peers');
 
 const load = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
 const save = (f, d) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(d)); };
@@ -90,6 +93,7 @@ async function main() {
   }
 
   // ---- 2. 更新追蹤狀態（新上架／價格歷史／下架）----
+  const sold = load(F.sold, { watch: {}, hits: [] });
   for (const [src, list] of Object.entries(fresh)) {
     const prev = tracker.sources[src];
     // 沒抓完整（591 快速模式）或筆數掉到上次一半以下（平台異常）→ 不判下架
@@ -108,7 +112,7 @@ async function main() {
     }
     if (trustful) {
       for (const [key, rec] of Object.entries(tracker.items)) {
-        if (key.startsWith(src + '_') && !seen.has(key) && !rec.removedAt) rec.removedAt = now;
+        if (key.startsWith(src + '_') && !seen.has(key) && !rec.removedAt) { rec.removedAt = now; peers.watchRemoved(sold, key, rec); }
       }
       tracker.sources[src] = { count: list.length, at: now };
     } else if (!partial) {
@@ -159,6 +163,38 @@ async function main() {
     console.log('[社區實登]', JSON.stringify(runLog.sources['社區實登']));
   }
 
+  // ---- 4c. 同等級社區（嚴格版低於行情）＋ 成交回填 ----
+  //   前段候選（主力五區、有社區、已有關鍵字／屋主／同社區低於實登）→ 本社區＋1.5 km 內屋齡相近的社區成交
+  const pcache = load(F.peers, {});
+  {
+    const t0 = Date.now();
+    const listN = await peers.refreshList(pcache);
+    const cand = [];
+    for (const rec of Object.values(tracker.items)) {
+      const d = !rec.removedAt && rec.d;
+      if (!d?.communityId || !cfg.districts.includes(d.district)) continue;
+      const cm = community.compare(d.price && d.area ? d.price / d.area : d.unitPrice, commCache[d.communityId]);
+      const pri = core.tagsOf(d).size * 2 + (d.isOwner ? 2 : 0) + (cm && cm.diff < 0 ? 3 : 0);
+      if (pri) cand.push([String(d.communityId), pri]);
+    }
+    cand.sort((a, b) => b[1] - a[1]);
+    const order = [], seenC = new Set();
+    const push = id => { if (!seenC.has(id)) { seenC.add(id); order.push(id); } };
+    for (const w of Object.values(sold.watch)) push(w.comm);           // 下架案的社區（找成交）
+    for (const [id] of cand) { push(id); peers.nearIds(id, pcache).forEach(push); }
+    const n = await peers.refreshDeals(order, pcache, full ? 700 : 120);
+    peers.prune(pcache, seenC);
+    const hits = peers.matchSold(sold, pcache);
+    save(F.peers, pcache); save(F.sold, sold);
+    runLog.sources['同等級社區'] = { ok: true, list: pcache.list?.items.length || 0, listFetched: listN, fetched: n,
+      cached: Object.keys(pcache.deals || {}).length, of: order.length, soldWatch: Object.keys(sold.watch).length,
+      soldHits: sold.hits.length, newHits: hits, sec: Math.round((Date.now() - t0) / 1000) };
+    console.log('[同等級社區]', JSON.stringify(runLog.sources['同等級社區']));
+  }
+  const bargain = peers.bargainByComm(sold);
+  const commLL = new Map((pcache.list?.items || []).map(x => [String(x[0]), [x[1], x[2]]]));
+  const overrides = new Set(load(path.join(STATE, 'overrides.json'), []));
+
   // ---- 5. 組合：去重 → 標籤 → 行情 → 同體系 → 分數 ----
   const active = [];
   for (const [key, rec] of Object.entries(tracker.items)) {
@@ -197,6 +233,14 @@ async function main() {
     const cm = commId ? community.compare(rep.unitPrice, commCache[commId]) : null;
     if (cm && cm.diff < 0) tags.add('低於實登');
     let { score, why } = core.scoreOf(tags, mk, drop, cm);
+    // 嚴格版：跟 1.5 km 內同等級社區（單價差 10% 內）同房數、坪數相近的近 2 年成交比，仍然比較低 → 最強訊號
+    const ps = commId ? peers.compare(rep, String(commId), pcache, { fallbackLevel: commCache[commId]?.med }) : null;
+    if (ps) {
+      if (ps.diff < 0) tags.add('同等級仍低');
+      const b = ps.diff <= -10 ? 30 : ps.diff <= -5 ? 20 : ps.diff < 0 ? 10 : ps.diff >= 10 ? -5 : 0;
+      if (b) { score += b; why.push(`同等級社區${ps.diff > 0 ? '+' : ''}${ps.diff}%${b > 0 ? '+' : ''}${b}`); }
+    }
+    const bg = commId ? bargain[String(commId)] : null;
     // 開發優先順序（用戶指示 2026-10-21）：
     //   只有屋主自己在賣（沒有仲介）→ 額外 +8（連同屋主自售 12 共 20），排最前
     //   屋主＋仲介 → 一樣上榜，但只拿屋主自售 12，主要靠關鍵字／低於行情排序
@@ -213,15 +257,20 @@ async function main() {
     const firstM = ms.slice().sort((a, b) => (a._first || '').localeCompare(b._first || '') || a._key.localeCompare(b._key))[0];
     const id = stableId(firstM);
     const first = firstM._first;
-    const m = core.matchSameSystem(rep, storeIdx);
+    // 網站上有人標「比對錯了」→ 不算同體系，改回可開發
+    let m = core.matchSameSystem(rep, storeIdx);
+    if (m && overrides.has(id)) { m = null; why.push('同體系比對經人工確認不是同一戶'); }
 
     // 案件池（給客需配對）：所有在架物件，精簡欄位
     pool.push({ id, t: rep.title, d: rep.district, a: rep.address, c: rep.community, p: rep.price, up: rep.unitPrice,
       ar: rep.area, fl: rep.floor, ag: rep.age, ly: rep.layout, ty: rep.type, ph: rep.photo,
       u: (ms.find(x => x.source !== '591') || ms[0]).url, s: [...new Set(ms.map(x => x.source))],
-      sc: score, tg: [...tags], cm: cm ? cm.diff : null, same: m ? 1 : 0, f: first, own: owner ? (ownerOnly ? 2 : 1) : 0,
+      sc: score, tg: [...tags], cm: cm ? cm.diff : null, pd: ps ? ps.diff : null, same: m ? 1 : 0, f: first, own: owner ? (ownerOnly ? 2 : 1) : 0,
       // 車位：591 有欄位；其他平台不知道 → null（配對時「要車位」不會因此被刷掉）
-      pk: ms.some(x => x.hasCarport) ? 1 : ms.some(x => x.source === '591') ? 0 : null });
+      pk: ms.some(x => x.hasCarport) ? 1 : ms.some(x => x.source === '591') ? 0 : null,
+      // 社區座標（客需通勤距離用；沒有社區的案子沒有座標）、591 編號（產生說明書用）
+      ll: commId ? commLL.get(String(commId)) || null : null,
+      a5: (ms.find(x => String(x.source).startsWith('591')) || {}).sourceId || null });
 
     if (!hot) continue;
     // 同體系店家已有 → 不能開發，關鍵字再好也一樣；另列一份給人工抽查比對有沒有誤判
@@ -237,6 +286,8 @@ async function main() {
       market: mk && { median: mk.median, diff: mk.diff, n: mk.count, level: mk.matchLevel },
       comm: cm && { med: cm.med, n: cm.n, min: cm.min, diff: cm.diff, belowMin: cm.belowMin, recent: cm.recent,
         url: `https://market.591.com.tw/${commId}` },
+      peer: ps && { diff: ps.diff, med: ps.med, n: ps.n, comms: ps.comms, level: ps.level },
+      bargain: bg || null,
       sources: ms.map(m => ({ s: m.source, url: m.url, price: m.price, agent: m.agent || '', hist: m._hist })),
       // 幾個人在賣：屋主自己刊、沒有仲介 = 最好開發；十幾個仲介 = 大概是一般約、競爭激烈
       posters: { total: ms.length, agents: agentCount, owner },

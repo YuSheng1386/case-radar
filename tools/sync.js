@@ -11,7 +11,7 @@ const STATE = process.env.RADAR_STATE || path.join(ROOT, 'state');
 const { RADAR_URL, INGEST_KEY } = process.env;
 if (!RADAR_URL || !INGEST_KEY) { console.error('缺 RADAR_URL 或 INGEST_KEY'); process.exit(1); }
 
-const STATE_FILES = ['tracker', 'yc-listings', 'community', 'market-prices', 'notify'];
+const STATE_FILES = ['tracker', 'yc-listings', 'community', 'market-prices', 'notify', 'peers', 'sold'];
 const url = name => `${RADAR_URL.replace(/\/$/, '')}/api/ingest/blob/${name}`;
 const H = { 'X-Ingest-Key': INGEST_KEY };
 
@@ -25,6 +25,13 @@ async function pull() {
     fs.writeFileSync(path.join(STATE, `${f}.json`), buf);
     console.log(`state-${f}: ${(buf.length / 1e6).toFixed(1)} MB`);
   }
+  // 網站上標「同體系比對錯了」的案件 → run.js 讀 state/overrides.json 改回可開發
+  const r = await fetch(`${RADAR_URL.replace(/\/$/, '')}/api/ingest/overrides`, { headers: H });
+  if (r.ok) {
+    const ids = await r.json();
+    fs.writeFileSync(path.join(STATE, 'overrides.json'), JSON.stringify(ids));
+    console.log(`同體系人工排除：${ids.length} 筆`);
+  } else console.log(`同體系人工排除：讀取失敗 HTTP ${r.status}（沿用規則）`);
 }
 
 async function put(name, file) {

@@ -39,6 +39,24 @@ const Match = (() => {
   const road = a => { const m = String(a || '').replace(/^.{2,3}[市縣]/, '').replace(/^.{1,4}?[區鄉鎮市]/, '').match(/^(.+?(?:大道|路|街)(?:.{1,2}段)?)/); return m ? m[1] : ''; };
   const norm = s => String(s || '').replace(/\s+/g, '');
 
+  // 直線距離（公里）
+  function km(a, b) {
+    const R = 6371, r = Math.PI / 180, dLat = (b[0] - a[0]) * r, dLng = (b[1] - a[1]) * r;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(a[0] * r) * Math.cos(b[0] * r) * Math.sin(dLng / 2) ** 2;
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+  // landmarks: [{name, lat, lng, maxKm}] → 最近的那個 {name, km, maxKm}
+  function nearestLandmark(ll, landmarks) {
+    if (!ll || !landmarks?.length) return null;
+    let best = null;
+    for (const l of landmarks) {
+      if (!l.lat || !l.lng) continue;
+      const d = Math.round(km(ll, [l.lat, l.lng]) * 10) / 10;
+      if (!best || d < best.km) best = { name: l.name, km: d, maxKm: +l.maxKm || null };
+    }
+    return best;
+  }
+
   // history: client_items 陣列 [{item_id, status, reasons, snapshot}]
   function digest(history) {
     const seen = new Set(), likedComm = {}, likedRoad = {}, likedDist = {}, dislikedComm = new Set(), likedPrices = [], reasons = {};
@@ -98,12 +116,16 @@ const Match = (() => {
       if (exKw.length && exKw.some(k => k && text.includes(k))) { bump('排除建商/建案'); continue; }
       if (it.c && H.dislikedComm.has(norm(it.c))) { bump('客人不喜歡的社區'); continue; }
       if (P.excludeSameSystem && it.same) { bump('同體系物件'); continue; }
+      // 通勤：到最近地標的直線距離（案件用社區座標；沒社區的案子距離不明，不篩掉）
+      const lm = nearestLandmark(it.ll, P.landmarks);
+      if (lm && lm.maxKm && lm.km > lm.maxKm) { bump('通勤距離'); continue; }
 
       // ---- 排序分數 ----
       let ms = 0; const why = [];
       const add = (v, w) => { if (v) { ms += v; why.push(w); } };
       add(Math.min(30, Math.round((it.sc || 0) * 0.4)), `競爭力${it.sc}`);
       if (it.cm != null && it.cm < 0) add(10, `開價低於同社區實登${it.cm}%`);
+      if (it.pd != null && it.pd < 0) add(8, `同等級社區比較仍低${it.pd}%`);
       if (P.priceMax && it.p) {
         const mid = ((+P.priceMin || P.priceMax * 0.7) + +P.priceMax) / 2;
         add(Math.max(0, 10 - Math.round(Math.abs(it.p - mid) / mid * 40)), '價格貼近預算');
@@ -117,9 +139,10 @@ const Match = (() => {
       if (H.likedMid && it.p && Math.abs(it.p - H.likedMid) / H.likedMid <= 0.1) add(8, '跟喜歡的案價位相近');
       if ((H.reasons['價格太高'] || 0) >= 2 && P.priceMax && it.p > P.priceMax * 0.9) add(-10, '客人嫌貴過→偏預算上緣扣分');
       if (fl == null && (P.floorMin || P.floorMax)) add(-3, '樓層不明');
+      if (lm) add(lm.km <= 1 ? 12 : lm.km <= 3 ? 8 : lm.km <= 5 ? 4 : lm.km > 10 ? -5 : 0, `離${lm.name} ${lm.km}km`);
       if (it.same) why.push('同體系物件');
       if (it.own === 2) why.push('屋主自售');
-      res.push({ ...it, ms, why });
+      res.push({ ...it, ms, why, km: lm ? lm.km : null, lmName: lm ? lm.name : null });
     }
     res.sort((a, b) => b.ms - a.ms);
     return { items: res, out, H };

@@ -1,0 +1,31 @@
+name: 每週加密備份
+
+on:
+  schedule:
+    - cron: '17 19 * * 0'     # 台灣時間每週一 03:17
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      RADAR_URL: ${{ secrets.RADAR_URL }}
+      INGEST_KEY: ${{ secrets.INGEST_KEY }}
+      BACKUP_PASS: ${{ secrets.BACKUP_PASS }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # 加密後存回網站 KV（backup-w0..w7 輪替）；另存 artifact（公開 repo 也只能下載到加密檔）
+      - name: 備份
+        run: node tools/backup.js
+      - uses: actions/upload-artifact@v4
+        with:
+          name: radar-backup
+          path: backup/*.enc
+          retention-days: 90

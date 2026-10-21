@@ -32,7 +32,7 @@ function hashPrefs(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.
 
 const ownerOnly = c => c.posters && c.posters.owner && c.posters.agents === 0;
 const cardLine = c => {
-  const tag = ownerOnly(c) ? '只有屋主' : c.cmp?.diff != null && c.cmp.diff < 0 ? `同等級低${-c.cmp.diff}%` : (c.tags || []).slice(0, 2).join('/');
+  const tag = ownerOnly(c) ? '只有屋主' : c.peer && c.peer.diff < 0 ? `同等級低${-c.peer.diff}%` : (c.tags || []).slice(0, 2).join('/');
   const url = (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9))[0]?.url || '';
   return `・${tag}｜${c.district}${c.community || c.title.slice(0, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}（${c.score}分）\n  ${url}`;
 };

@@ -8,3 +8,6 @@ web/.dev.vars
 docs/pool.json
 web/.setup-code.txt
 web/.ingest-key
+backup/
+web/.backup-pass
+web/.ingest-key.new

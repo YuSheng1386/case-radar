@@ -67,6 +67,27 @@ curl -s -b $J $B/api/clients | grep -q '"new_count":1' && ok "客戶列表顯示
 curl -s -b $J2 $B/api/clients/$CID/alerts | grep -q 沒有權限 && ok "成員讀不到別人的新配對" || bad "新配對越權"
 curl -s -b $J -X POST $B/api/clients/$CID/alerts/seen | grep -q ok && curl -s -b $J $B/api/clients | grep -q '"new_count":0' && ok "打開後標已看" || bad "標已看"
 
+echo "4c. 下次聯絡日＋同體系比對錯了"
+curl -s -b $J -X PUT $B/api/dev/$I2 -H 'Content-Type: application/json' -d '{"status":"已聯絡","note":"再打","next_contact":"2026-10-21"}' | grep -q ok && curl -s -b $J $B/api/dev | grep -q '"next_contact":"2026-10-21"' && ok "存下次聯絡日" || bad "下次聯絡日"
+curl -s -b $J -X PUT $B/api/dev/$I2 -H 'Content-Type: application/json' -d '{"status":"已聯絡","next_contact":"<x>"}' | grep -q ok && ! curl -s -b $J $B/api/dev | grep -q '<x>' && ok "亂填日期不會存" || bad "日期驗證"
+curl -s -b $J2 -X PUT $B/api/same-override/$I1 -H 'Content-Type: application/json' -d '{"note":"樓層不同"}' | grep -q ok && ok "成員標比對錯了" || bad "標比對錯"
+curl -s -H 'X-Ingest-Key: test-ingest-key' $B/api/ingest/overrides | grep -q "$I1" && ok "雷達讀得到人工排除" || bad "讀人工排除"
+curl -s -o /dev/null -w '%{http_code}' $B/api/ingest/overrides | grep -q 401 && ok "人工排除清單要金鑰" || bad "人工排除未保護"
+curl -s -b $J -X DELETE $B/api/same-override/$I1 | grep -q ok && [ "$(curl -s -H 'X-Ingest-Key: test-ingest-key' $B/api/ingest/overrides)" = "[]" ] && ok "復原" || bad "復原"
+
+echo "4d. 地標定位、加密備份"
+curl -s -b $J -X POST $B/api/geocode -H 'Content-Type: application/json' -d '{"q":"南屯區大業路105號"}' | grep -q '"lat":24' && ok "門牌定位（內政部）" || bad "門牌定位"
+curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/geocode -H 'Content-Type: application/json' -d '{"q":"x"}' | grep -q 401 && ok "定位要登入" || bad "定位未保護"
+cd ..
+OUT=$(RADAR_URL=$B INGEST_KEY=test-ingest-key BACKUP_PASS=test-backup-pass-123456 node tools/backup.js 2>&1)
+echo "$OUT" | grep -q '已驗證可解密' && ok "備份：$(echo "$OUT" | grep -o 'clients [0-9]*、client_items [0-9]*')" || bad "備份：$OUT"
+F=$(ls -t backup/*.enc | head -1)
+BACKUP_PASS=wrong-pass-xxxxxxxxxx node tools/backup.js decrypt $F >/dev/null 2>&1 && bad "錯密碼竟能解" || ok "錯密碼解不開"
+BACKUP_PASS=test-backup-pass-123456 node tools/backup.js decrypt $F | grep -q 測試客戶 && ok "還原內容正確" || bad "還原"
+BACKUP_PASS=test-backup-pass-123456 node tools/backup.js decrypt $F | grep -q pw_hash && bad "備份含密碼雜湊" || ok "備份不含密碼雜湊"
+rm -f $F
+cd web
+
 echo "5. 登入鎖定"
 for i in $(seq 1 8); do curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d '{"username":"member1","password":"bad"}' >/dev/null; done
 curl -s -X POST $B/api/login -H 'Content-Type: application/json' -d '{"username":"member1","password":"member-pass-1"}' | grep -q 太多次 && ok "連錯 8 次鎖 15 分鐘" || bad "沒有鎖定"

@@ -61,7 +61,17 @@ CREATE TABLE IF NOT EXISTS dev_status (
   user_id INTEGER NOT NULL,
   note TEXT DEFAULT '',
   snapshot TEXT NOT NULL,
-  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  next_contact TEXT DEFAULT ''              -- 下次聯絡日 YYYY-MM-DD（舊資料庫用 ALTER TABLE 加，見交接）
+);
+
+-- 同體系比對錯了：人工標記後該案改回可開發（雷達下次跑也尊重，tools/sync.js pull 會抓）
+CREATE TABLE IF NOT EXISTS same_override (
+  item_id TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  note TEXT DEFAULT '',
+  snapshot TEXT DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 -- 登入失敗紀錄：15 分鐘內同帳號或同 IP 失敗 8 次就暫停
