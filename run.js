@@ -279,7 +279,10 @@ async function main() {
       pk: ms.some(x => x.hasCarport) ? 1 : ms.some(x => x.source === '591') ? 0 : null,
       // 社區座標（客需通勤距離用；沒有社區的案子沒有座標）、591 編號（產生說明書用）
       ll: commId ? commLL.get(String(commId)) || null : null,
-      a5: (ms.find(x => String(x.source).startsWith('591')) || {}).sourceId || null });
+      a5: (ms.find(x => String(x.source).startsWith('591')) || {}).sourceId || null,
+      // LINE 配對查詢用：主建物坪、車位型式、591 特色標籤
+      ma: rep.mainArea ?? null, pt: (ms.find(x => x.carModel) || {}).carModel || null,
+      ft: [...new Set(ms.flatMap(x => x.features || []))] });
 
     if (!hot) continue;
     // 同體系店家已有 → 不能開發，關鍵字再好也一樣；另列一份給人工抽查比對有沒有誤判

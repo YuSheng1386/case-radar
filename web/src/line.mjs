@@ -27,7 +27,9 @@ const HELP = `🏠 案件雷達查詢
 ・降價、急售、賠售、低於行情
 ・特色／地點：近捷運、學區、公園、景觀、邊間、採光、陽台、制震、品牌建商、車庫、店面、路名、社區名
 ・排序：最便宜、單價最低、最新、坪數最大（不打＝分數高的先）
-・同體系：預設不列；打「含同體系」一起列（標🔒），「只看同體系」只列
+・同體系：開發預設不列；打「含同體系」一起列（標🔒），「只看同體系」只列
+・配對：前面加「配對」或「客戶」＝所有在架物件，只要符合就列（不看分數），預設含同體系（「不要同體系」排除）
+例（配對）：「配對 南屯 3房 1500萬以下 平面車位」
 例：「東區優質透天」「屯區 20年內 透天 有車位」「崇德路 3房 最便宜」
 回「更多」看下一頁`;
 
@@ -82,10 +84,20 @@ function normalize(text) {
 const NUM = String.raw`(\d+(?:\.\d+)?)`;
 const range = (a, b, u) => a != null && b != null ? `${a}–${b}${u}` : a != null ? `≥${a}${u}` : `≤${b}${u}`;
 
-export function parse(text, districts, main) {
+export function parse(text, districts, main, where = {}) {
   let s = normalize(text);
   const conds = [];
-  const q = { ds: [], conds, sort: null, scope: '' };
+  const q = { ds: [], conds, sort: null, scope: '', mode: 'dev' };
+  // ---- 開發／配對 ----
+  //   開發（預設）：有競爭力、分數夠的案件；配對：案件池裡所有在架物件，只要符合條件都列（幫客人找房）
+  if (/配對|買方|客戶|客人|買家|幫客|所有物件|全部物件|不限分數|一般物件/.test(s)) {
+    q.mode = 'match';
+    s = s.replace(/配對|買方|客戶|客人|買家|幫客|所有物件|全部物件|不限分數|一般物件/g, ' ');
+  }
+  // 預設：開發不列同體系、配對照網站客戶配對的規則一起列（標🔒）
+  if (q.mode === 'match') q.sm = 'inc';
+  take0(/(?:不要|排除|不含|去掉)(?:同)?體系(?:內的|內|的)?(?:案件|物件)?/, () => { q.sm = null; });
+  function take0(re, fn) { if (re.test(s)) { fn(); s = s.replace(new RegExp(re.source, 'g'), ' '); } }
   // 吃掉符合的字串，回傳有沒有吃到
   const take = (re, fn) => {
     let hit = false;
@@ -196,14 +208,22 @@ export function parse(text, districts, main) {
 
   // ---- 剩下的字 → 關鍵字（路名、社區名、特色）----
   for (const w of [...STOP].sort((a, b) => b.length - a.length)) s = s.split(w).join(' ');
-  let free = false;
-  for (const w of s.split(/\s+/)) {
-    if (w.length >= 2 && !/^\d+$/.test(w)) { free = true; add('kw', `「${w}」`, w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
+  const free = [];
+  for (let w of s.split(/\s+/)) {
+    // 「靠近東平路」「東平路附近」「在崇德路上」→ 東平路
+    w = w.replace(/^(?:靠近|鄰近|接近|附近的?|周邊的?|位於|在|近|沿著?)/, '').replace(/(?:附近|周邊|旁邊|一帶|沿線|上|旁|邊)$/, '');
+    if (w.length >= 2 && !/^\d+$/.test(w)) { free.push(w); add('kw', `「${w}」`, w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
   }
-  // 沒打區域但打了路名／社區名 → 找全台中（崇德路在北屯，不在主力五區）
-  if (free && q.scope === '主力五區') { q.ds = [...districts]; q.scope = '全台中'; }
+  // 沒打區域但打了路名／社區名 → 用地名表找在哪幾區（崇德路在北屯，不在主力五區）；表裡沒有就找全台中
+  if (free.length && q.scope === '主力五區') {
+    const hit = new Set();
+    for (const w of free) for (const [k, ix] of Object.entries(where)) if (k.includes(w) || (w.length >= 3 && w.includes(k))) ix.forEach(i => hit.add(districts[i]));
+    q.ds = hit.size ? [...hit].filter(Boolean) : [...districts];
+    q.scope = hit.size && hit.size <= 4 ? q.ds.join('、') : '全台中';
+  }
   // 什麼都沒打（例如「你好」只會剩關鍵字「你好」）→ 回說明
-  q.none = q.scope === '主力五區' && !conds.length && !q.sort && !q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text));
+  q.none = q.scope === '主力五區' && !conds.length && !q.sort && (q.mode === 'match' || (!q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text))));
+  // 配對只打「配對」沒有任何條件 → 五區六千件沒意義，回說明
   return q;
 }
 
@@ -249,7 +269,7 @@ const SORT_L = { p: '總價低的先', up: '單價低的先', f: '最新上架�
 
 export function filter(items, q, conds = q.conds) {
   const smOk = x => q.sm === 'inc' || (q.sm === 'only' ? x.sm : !x.sm);
-  return items.filter(x => smOk(x) && conds.every(c => test(c, x))).sort((a, b) => (q.sort ? SORTS[q.sort](a, b) : 0) || b.sc - a.sc);
+  return items.filter(x => smOk(x) && conds.every(c => test(c, x))).sort((a, b) => (q.sort ? SORTS[q.sort](a, b) : q.mode === 'match' ? SORTS.p(a, b) : 0) || b.sc - a.sc);
 }
 
 // 查不到 → 每次拿掉一個條件，看各有幾件
@@ -260,15 +280,15 @@ export function relax(items, q) {
 export function page(res, q, off, at, items) {
   const t = new Date(Date.parse(at) + 8 * 3600e3);
   const when = `${t.getUTCMonth() + 1}/${t.getUTCDate()} ${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}`;
-  const head = [q.scope, ...q.conds.map(c => c.l), ...(q.sm ? [q.sm === 'only' ? '只看同體系' : '含同體系'] : [])].join('・');
+  const head = [q.mode === 'match' ? '【配對】' + q.scope : '【開發】' + q.scope, ...q.conds.map(c => c.l), ...(q.sm ? [q.sm === 'only' ? '只看同體系' : '含同體系'] : [])].join('・');
   if (!res.length) {
     const rx = items ? relax(items, q) : [];
-    return `${head}\n目前沒有符合的可開發案件（資料 ${when}）` +
+    return `${head}\n${q.mode === 'match' ? '目前沒有符合的物件' : '目前沒有符合的可開發案件'}（資料 ${when}）` +
       (rx.length ? '\n\n放寬看看：\n' + rx.map(([l, n]) => `・拿掉「${l.replace(/[「」]/g, '')}」有 ${n} 件`).join('\n') : '') +
       '\n\n打「說明」看可以用的條件';
   }
   const sl = res.slice(off, off + PAGE);
-  let msg = `${head}\n共 ${res.length} 件，第 ${off + 1}–${off + sl.length} 件（${SORT_L[q.sort] || '分數高的先'}；資料 ${when}）\n\n` + sl.map(x => x.x).join('\n');
+  let msg = `${head}\n共 ${res.length} 件，第 ${off + 1}–${off + sl.length} 件（${SORT_L[q.sort] || (q.mode === 'match' ? '總價低的先' : '分數高的先')}；資料 ${when}）\n\n` + sl.map(x => x.x).join('\n');
   msg += off + PAGE < res.length ? `\n\n回「更多」看下 ${Math.min(PAGE, res.length - off - PAGE)} 件` : '\n\n（已經是最後一頁）';
   return msg.slice(0, 4900);
 }
@@ -291,6 +311,29 @@ async function reply(env, token, text) {
   });
 }
 
+// 案件池陣列 → 物件（欄位順序 meta.pkeys，tools/line-index.js PKEYS）
+//   不逐欄複製（6000 件 × 18 欄太耗 CPU），改成包一層、欄位用 getter 直接讀陣列
+const NONE = [];
+let Pool = null, PoolKeys = '';
+export function poolItem(a, keys, d) {
+  if (PoolKeys !== keys.join()) {
+    Pool = function (a, d) { this.a = a; this._d = d; };
+    keys.forEach((k, i) => Object.defineProperty(Pool.prototype, k, {
+      get: k === 'f' ? function () { return this.a[i] * 1000; } : k === 'tg' ? function () { return this.a[i] || NONE; } : function () { return this.a[i]; }
+    }));
+    Object.defineProperty(Pool.prototype, 'dr', { get: () => 0 });
+    PoolKeys = keys.join();
+  }
+  return new Pool(a, d);
+}
+
+// 配對模式每件一行（案件池沒有預先排好的文字）：總價先，客人最在意
+export function matchLine(x) {
+  const url = String(x.u || '').replace(/^591:/, 'https://sale.591.com.tw/home/house/detail/');
+  const bits = [x.ar != null ? `${x.ar}坪` : '', x.fs, x.ly, x.ag != null ? `屋齡${x.ag}年` : '', x.pt ? `🚗${x.pt.replace(/式$/, '')}車位` : x.pk ? '🚗含車位' : ''].filter(Boolean);
+  return `${x.sm ? '🔒同體系 ' : ''}・${x.p ?? '—'}萬｜${x._d} ${x.n || ''}\n  ${bits.join(' ')}${x.own === 2 ? '・只有屋主在賣' : x.own ? '・有屋主在賣' : ''}\n  ${url}`;
+}
+
 async function answer(env, uid, text) {
   const t = text.trim();
   if (/^(說明|help|\?|？|怎麼用|指令|用法)$/i.test(t)) return HELP;
@@ -304,23 +347,36 @@ async function answer(env, uid, text) {
     if (!st) return '沒有上一次的查詢，直接打條件，例如「東區優質透天」';
     src = st.text; off = st.off + PAGE;
   }
-  const q = parse(src, meta.districts, meta.main);
+  const q = parse(src, meta.districts, meta.main, meta.where || {});
   if (q.none) return HELP;
-  const parts = await Promise.all(q.ds.map(d => env.BLOBS.get(`line-${meta.districts.indexOf(d)}`, 'json')));
-  const items = parts.filter((p, i) => p && p.d === q.ds[i]).flatMap(p => p.items.map(x => (x._d = p.d, x)));
+  const pre = q.mode === 'match' ? 'line-p' : 'line-';
+  const parts = await Promise.all(q.ds.map(d => env.BLOBS.get(`${pre}${meta.districts.indexOf(d)}`, 'json')));
+  // 配對模式：關鍵字欄位（路名、社區、特色）另存，條件有用到才讀
+  const needT = q.mode === 'match' && q.conds.some(c => c.k === 'kw' || c.k === 'pkt' || c.k === 'pkn');
+  const tks = needT ? await Promise.all(q.ds.map(d => env.BLOBS.get(`line-pt${meta.districts.indexOf(d)}`, 'json'))) : [];
+  const items = parts.flatMap((p, i) => !p || p.d !== q.ds[i] ? [] : q.mode === 'match'
+    ? p.items.map((a, j) => { const o = poolItem(a, meta.pkeys, p.d); if (needT) o.t = tks[i]?.t[j] || ''; return o; })
+    : p.items.map(x => (x._d = p.d, x)));
   const res = filter(items, q);
-  // 只讀這一頁用到的區的顯示文字
   const sl = res.slice(off, off + PAGE);
-  const need = [...new Set(sl.map(x => x._d))];
-  const tx = await Promise.all(need.map(d => env.BLOBS.get(`line-x${meta.districts.indexOf(d)}`, 'json')));
-  const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
-  for (const x of sl) x.x = x.x || byD[x._d]?.[x.id] || `・${x.sc}分｜${x._d} ${x.p}萬`;
+  if (q.mode === 'match') {
+    const need = [...new Set(sl.map(x => x._d))];
+    const tx = await Promise.all(need.map(d => env.BLOBS.get(`line-px${meta.districts.indexOf(d)}`, 'json')));
+    const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
+    for (const x of sl) { [x.n, x.fs, x.ly, x.u] = byD[x._d]?.[x.id] || []; x.x = matchLine(x); }
+  } else {
+    // 只讀這一頁用到的區的顯示文字
+    const need = [...new Set(sl.map(x => x._d))];
+    const tx = await Promise.all(need.map(d => env.BLOBS.get(`line-x${meta.districts.indexOf(d)}`, 'json')));
+    const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
+    for (const x of sl) x.x = x.x || byD[x._d]?.[x.id] || `・${x.sc}分｜${x._d} ${x.p}萬`;
+  }
   // 只有認不得的字、又什麼都沒對到（例如「你好」）→ 回說明
   if (!res.length && q.scope === '全台中' && q.conds.every(c => c.k === 'kw'))
     return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + HELP;
   if (off && off >= res.length) return '已經是最後一頁了';
   await env.BLOBS.put(stKey, JSON.stringify({ text: src, off }), { expirationTtl: 3600 });
-  return page(res, q, off, meta.at, items) + `\n${SITE}/#dev`;
+  return page(res, q, off, meta.at, items) + `\n${SITE}/#${q.mode === 'match' ? 'clients' : 'dev'}`;
 }
 
 export async function webhook(req, env) {
