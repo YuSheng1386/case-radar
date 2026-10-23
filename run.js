@@ -301,6 +301,7 @@ async function main() {
       // 幾個人在賣：屋主自己刊、沒有仲介 = 最好開發；十幾個仲介 = 大概是一般約、競爭激烈
       posters: { total: ms.length, agents: agentCount, owner },
       ownerGone,
+      parking: ms.some(x => x.hasCarport) ? 1 : ms.some(x => String(x.source).startsWith('591')) ? 0 : null,
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     });
