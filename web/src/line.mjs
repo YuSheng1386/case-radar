@@ -12,7 +12,7 @@ const SITE = 'https://case-radar.yusheng1386.workers.dev';
 
 const HELP = `🏠 案件雷達查詢
 直接打字，條件可以混著用：
-・區域：太平、東區、南屯大里、屯區、海線、山城、舊市區、三屯、全台中（不打＝主力五區；打路名或社區名＝全台中）
+・區域：太平、東區、南屯大里、屯區、海線、山城、舊市區、三屯、全台中（不打＝主力區：南屯、南區、西區、東區、大里、太平；打路名或社區名＝全台中）
 ・類型：大樓、華廈、公寓、透天、別墅、套房
 ・總價：1500萬以下、1000-2000萬、1500萬左右
 ・單價：單價30萬以下
@@ -120,14 +120,14 @@ export function parse(text, districts, main, where = {}) {
   // ---- 區域 ----
   const ds = new Set();
   take(/全台中|全市|全部區域|所有區域/, () => districts.forEach(d => ds.add(d)));
-  take(/主力五區|主力區|五區/, () => main.forEach(d => ds.add(d)));
+  take(/主力[五六]?區|[五六]區/, () => main.forEach(d => ds.add(d)));
   for (const [g, list] of Object.entries(GROUPS)) take(new RegExp(g), () => list.forEach(d => ds.add(d)));
   // 完整區名優先；三字區名可省略「區」（太平、南屯）；東區／南區這種二字的要打「區」
   for (const d of [...districts].sort((a, b) => b.length - a.length)) {
     if (!take(new RegExp(d), () => ds.add(d)) && d.length >= 3) take(new RegExp(d.replace(/區$/, '')), () => ds.add(d));
   }
   q.ds = [...ds].filter(d => districts.includes(d));
-  if (!q.ds.length) { q.ds = main.filter(d => districts.includes(d)); q.scope = '主力五區'; }
+  if (!q.ds.length) { q.ds = main.filter(d => districts.includes(d)); q.scope = '主力區'; }
   else q.scope = q.ds.length > 4 ? `${q.ds.length}區` : q.ds.join('、');
 
   // ---- 單價（先處理，免得被當總價）----
@@ -215,15 +215,15 @@ export function parse(text, districts, main, where = {}) {
     if (w.length >= 2 && !/^\d+$/.test(w)) { free.push(w); add('kw', `「${w}」`, w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
   }
   // 沒打區域但打了路名／社區名 → 用地名表找在哪幾區（崇德路在北屯，不在主力五區）；表裡沒有就找全台中
-  if (free.length && q.scope === '主力五區') {
+  if (free.length && q.scope === '主力區') {
     const hit = new Set();
     for (const w of free) for (const [k, ix] of Object.entries(where)) if (k.includes(w) || (w.length >= 3 && w.includes(k))) ix.forEach(i => hit.add(districts[i]));
     q.ds = hit.size ? [...hit].filter(Boolean) : [...districts];
     q.scope = hit.size && hit.size <= 4 ? q.ds.join('、') : '全台中';
   }
   // 什麼都沒打（例如「你好」只會剩關鍵字「你好」）→ 回說明
-  q.none = q.scope === '主力五區' && !conds.length && !q.sort && (q.mode === 'match' || (!q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text))));
-  // 配對只打「配對」沒有任何條件 → 五區六千件沒意義，回說明
+  q.none = q.scope === '主力區' && !conds.length && !q.sort && (q.mode === 'match' || (!q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text))));
+  // 配對只打「配對」沒有任何條件 → 主力區幾千件沒意義，回說明
   return q;
 }
 

@@ -127,7 +127,7 @@ async function viewDev() {
   $('#main').innerHTML = `
     <div class="chips" id="tags">${TAGS.map(t => `<span class="chip${t === DEV.tag ? ' on' : ''}" data-t="${t}">${t}</span>`).join('')}</div>
     <div class="bar">
-      <select id="scope"><option value="">全台中</option><option value="main">主力五區</option><option value="wide">五區以外</option></select>
+      <select id="scope"><option value="">全台中</option><option value="main">主力區</option><option value="wide">主力區以外</option></select>
       <select id="dist"><option value="">全部區域</option>${dists.map(d => `<option value="${esc(d)}">${esc(d)}（${cnt[d]}）</option>`).join('')}</select>
       <select id="sort"><option value="score">依分數</option><option value="new">依上架</option><option value="drop">依降幅</option><option value="mk">依低於實登</option></select>
       <select id="st"><option value="">全部進度</option><option value="none">還沒人跟</option>${DEV_ST.map(s => `<option>${s}</option>`).join('')}</select>

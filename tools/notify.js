@@ -1,5 +1,5 @@
 // 新案件／新配對提醒（GitHub Actions：run.js 之後、sync push 之前跑）
-//   1. 開發：主力五區新出現「只有屋主在賣」或分數 ≥ NOTIFY_SCORE 的案件
+//   1. 開發：主力區（config.districts）新出現「只有屋主在賣」或分數 ≥ NOTIFY_SCORE 的案件
 //   2. 客戶：每位客戶用網站同一套配對規則（web/public/match.js）算，新出現配對分數 ≥ MATCH_MIN 的案件
 //      → 寫進網站（客戶列表顯示「X 件新配對」）
 //   3. 以上合併成「一則」LINE 摘要推給自己；只推沒推過的
@@ -74,7 +74,10 @@ async function main() {
 
   // ---- 1. 開發：新出現的好案 ----
   const qual = data.cards.filter(c => !c.wide && c.ownerGone == null && (ownerOnly(c) || c.score >= NOTIFY_SCORE));
-  const newCards = qual.filter(c => !st.cards[c.id]);
+  // 剛加進主力區的區（例如 10/24 加太平）：這次當基準不推，免得原本就在的好案一次全被當新案
+  const prevDs = st.districts || ['南區', '西區', '南屯區', '大里區', '東區'];   // 還沒記錄過＝加太平之前的五區
+  const newCards = qual.filter(c => !st.cards[c.id] && prevDs.includes(c.district));
+  st.districts = data.districts;
   for (const c of qual) st.cards[c.id] = st.cards[c.id] || now;
   const qualIds = new Set(qual.map(c => c.id));
   for (const [id, at] of Object.entries(st.cards)) if (!qualIds.has(id) && Date.now() - Date.parse(at) > 60 * 864e5) delete st.cards[id];
