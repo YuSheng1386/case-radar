@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>案件地圖</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="/app.css">
+<style>
+/* LINE 查詢結果地圖：/m/<token>（資料 /api/map/<token>，14 天失效） */
+html,body{height:100%}
+body{display:flex;flex-direction:column}
+.bar{padding:8px 16px;border-bottom:1px solid var(--line);background:var(--bg)}
+.bar h1{font-size:15px;margin:0;line-height:1.4}
+.bar .sub{font-size:12.5px;color:var(--mut)}
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:4px}
+.legend i{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:-1px}
+#map{flex:1;min-height:300px}
+.leaflet-container img{max-width:none!important;max-height:none!important}  /* app.css 的 img 限寬會讓地圖瓦片只剩一條 */
+.pop{font:13px/1.5 -apple-system,"PingFang TC","Noto Sans TC",sans-serif;white-space:pre-line;max-width:240px}
+.pop a{display:inline-block;margin-top:4px}
+.pop .ap{color:#7a5b00;font-size:12px}
+.err{padding:40px 16px;text-align:center;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="bar"><h1 id="t">載入中…</h1><div class="sub" id="sub"></div>
+  <div class="legend"><span><i style="background:#c0392b"></i>分數高</span><span><i style="background:#1f6f8b"></i>只有屋主在賣</span>
+  <span><i style="background:#6b6a66"></i>其他</span><span><i style="background:#9b59b6"></i>同體系</span><span>虛線框＝只知道路名，位置約略</span></div></div>
+<div id="map"></div>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+(async () => {
+  const tok = location.pathname.split('/').pop();
+  const r = await fetch('/api/map/' + tok);
+  if (!r.ok) { document.body.innerHTML = '<div class="err">地圖連結已失效（14 天），請在 LINE 重新查一次</div>'; return; }
+  const d = await r.json();
+  const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  document.getElementById('t').textContent = d.t;
+  const at = new Date(d.at);
+  document.getElementById('sub').textContent = `地圖標 ${d.items.length} 件${d.n > d.items.length ? `（共 ${d.n} 件）` : ''}・資料 ${at.getMonth() + 1}/${at.getDate()} ${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`;
+  const map = L.map('map');
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  const color = { good: '#c0392b', own: '#1f6f8b', sm: '#9b59b6', '': '#6b6a66' };
+  const bounds = [];
+  // 中心（地標一點、路名一串點）＋範圍圈
+  for (const c of d.c || []) {
+    L.circleMarker(c, { radius: 6, color: '#111', fillColor: '#ffd400', fillOpacity: 1, weight: 2 }).addTo(map);
+    if (d.r && d.c.length === 1) L.circle(c, { radius: d.r * 1000, color: '#ffb000', weight: 1.5, fillOpacity: 0.05 }).addTo(map);
+    bounds.push(c);
+  }
+  for (const [lat, lng, approx, label, price, url, kind] of d.items) {
+    const m = L.circleMarker([lat, lng], { radius: 8, color: approx ? '#333' : '#fff', dashArray: approx ? '3 3' : null, weight: 2,
+      fillColor: color[kind] || color[''], fillOpacity: 0.9 }).addTo(map);
+    m.bindPopup(`<div class="pop">${esc(label)}${approx ? '\n<span class="ap">（只知道路名，位置約略）</span>' : ''}${url ? `\n<a href="${esc(url)}" target="_blank" rel="noopener">看物件</a>` : ''}</div>`);
+    if (price != null) m.bindTooltip(price + '萬', { permanent: d.items.length <= 40, direction: 'top', offset: [0, -6] });
+    bounds.push([lat, lng]);
+  }
+  if (bounds.length) map.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 }); else map.setView([24.15, 120.67], 12);
+})();
+</script>
+</body>
+</html>

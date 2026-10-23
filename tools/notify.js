@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const Match = require('../web/public/match.js');
+const { roadKey } = require('./roads');
 
 const ROOT = path.join(__dirname, '..');
 const STATE = process.env.RADAR_STATE || path.join(ROOT, 'state');
@@ -141,6 +142,24 @@ async function main() {
       const top = x.items.slice().sort((a, b) => b.ms - a.ms)[0];
       return `・${x.name}：${x.items.length} 件（最高 ${top.c} ${top.p}萬，配對${top.ms}）`;
     }).join('\n') + '\n';
+  }
+  // 新案件標在地圖上（社區座標；沒有的用路名座標 state/roads.json），推播附連結
+  if (pc.length && !DRY && RADAR_URL && INGEST_KEY) {
+    const roads = load(path.join(STATE, 'roads.json'), { items: {} });
+    const items = [];
+    for (const c of pc) {
+      const rp = c.ll ? null : roads.items[roadKey(c.district, c.address)]?.pts;
+      const ll = c.ll || (rp && rp[Math.floor(rp.length / 2)]);
+      if (!ll) continue;
+      const line = cardLine(c);
+      items.push([ll[0], ll[1], c.ll ? 0 : 1, line.split('\n').filter(l => !/^\s*https?:/.test(l)).join('\n'), c.price,
+        (line.match(/https?:\/\/\S+/) || [])[0] || '', ownerOnly(c) ? 'own' : c.score >= NOTIFY_SCORE ? 'good' : '']);
+    }
+    if (items.length) {
+      const r = await fetch(`${SITE}/api/ingest/map`, { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ t: `新的可開發 ${pc.length} 件`, at: data.generatedAt, n: pc.length, items }) });
+      if (r.ok) msg += `\n🗺 地圖：${SITE}/m/${(await r.json()).token}`;
+    }
   }
   msg += `\n${SITE}/#${pc.length ? 'dev' : 'clients'}`;
 

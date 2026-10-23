@@ -302,6 +302,7 @@ async function main() {
       parking: ms.some(x => x.hasCarport) ? 1 : ms.some(x => String(x.source).startsWith('591')) ? 0 : null,
       parkType: (ms.find(x => x.carModel) || {}).carModel || null,
       features: [...new Set(ms.flatMap(x => x.features || []))],
+      ll: commId ? commLL.get(String(commId)) || null : null,   // 社區座標（LINE 附近查詢、地圖）
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     };

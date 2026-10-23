@@ -5,10 +5,11 @@
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
 import { webhook as lineWebhook } from './line.mjs';
+import { geocode } from './geo.mjs';
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITER = 20000;
-const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7]|line-(meta|(?:x|p|px|pt)?\d{1,2}))$/;
+const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7]|line-(meta|roads|(?:x|p|px|pt)?\d{1,2}))$/;
 const CLIENT_STATUSES = ['sent', 'liked', 'disliked', 'visit_req', 'booked', 'visited', 'offer', 'dropped'];
 const DEV_STATUSES = ['未聯絡', '已聯絡', '約見面', '簽委託', '放棄'];
 
@@ -71,11 +72,18 @@ export default {
     const url = new URL(req.url);
     const p = url.pathname;
     const m = req.method;
+    let r0;
     try {
       // 分享頁（公開）
       if (m === 'GET' && /^\/s\/[a-f0-9]{24}$/.test(p)) {
         // 注意要用 /share 不是 /share.html：靜態檔服務會把 .html 307 轉址到 /share，客人就拿不到 token
         return env.ASSETS.fetch(new Request(new URL('/share', url), req));
+      }
+      // LINE 查詢結果地圖（公開、連結本身就是鑰匙，14 天失效）：頁面 /m/<token>，資料 /api/map/<token>
+      if (m === 'GET' && /^\/m\/[a-f0-9]{24}$/.test(p)) return env.ASSETS.fetch(new Request(new URL('/map', url), req));
+      if (m === 'GET' && (r0 = p.match(/^\/api\/map\/([a-f0-9]{24})$/))) {
+        const v = await env.BLOBS.get(`map-${r0[1]}`, 'text');
+        return v ? new Response(v, { headers: { 'Content-Type': 'application/json; charset=utf-8' } }) : err('地圖連結已失效', 404);
       }
       // LINE 官方帳號對話查詢（LINE 平台打過來，用 LINE_SECRET 驗簽）
       if (p === '/api/line/webhook' && m === 'POST') return await lineWebhook(req, env);
@@ -126,6 +134,15 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/overrides' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     return json((await env.DB.prepare('SELECT item_id FROM same_override').all()).results.map(x => x.item_id));
+  }
+  // 推播用地圖（tools/notify.js 新案件）：存 KV map-<token> 14 天，回傳 token；頁面 /m/<token>
+  if (p === '/api/ingest/map' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const b = await body(req);
+    const tok = randHex(12);
+    await env.BLOBS.put(`map-${tok}`, JSON.stringify({ t: String(b.t || '').slice(0, 100), at: b.at, n: +b.n || 0, c: null, r: null,
+      items: (b.items || []).slice(0, 200) }), { expirationTtl: 14 * 86400 });
+    return json({ token: tok });
   }
   if (p === '/api/ingest/alerts' && m === 'POST') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
@@ -269,28 +286,8 @@ async function api(req, env, url, p, m) {
   //   回傳候選讓仲介確認（NLSC 會模糊比對到隔壁路，畫面上顯示定位到的地址）
   if (p === '/api/geocode' && m === 'POST') {
     const b = await body(req);
-    let q = String(b.q || '').trim().slice(0, 80);
-    if (!q) return err('請輸入地址或地標');
-    const out = [];
-    const full = /^(臺|台)中市/.test(q) ? q.replace(/^台中市/, '臺中市') : '臺中市' + q;
-    try {
-      const xml = await (await fetch(`https://api.nlsc.gov.tw/MapSearch/QuerySearch?word=${encodeURIComponent(full)}&feedback=XML`,
-        { headers: { Referer: 'https://maps.nlsc.gov.tw/', 'User-Agent': 'Mozilla/5.0' }, signal: AbortSignal.timeout(6000) })).text();
-      for (const it of xml.split('<ITEM>').slice(1, 6)) {
-        const c = (it.match(/<CONTENT>([^<]*)/) || [])[1], loc = (it.match(/<LOCATION>([^<]*)/) || [])[1];
-        if (!c || !loc || !/^臺中市/.test(c)) continue;   // 驗縣市（別縣市也有同名區）
-        const [lng, lat] = loc.split(',').map(Number);
-        if (lat && lng) out.push({ label: c, lat, lng, src: '內政部' });
-      }
-    } catch {}
-    if (!out.length) {
-      try {
-        const j = await (await fetch(`https://nominatim.openstreetmap.org/search?format=json&limit=3&countrycodes=tw&q=${encodeURIComponent(q.replace(/^(臺|台)中市/, '') + ' 臺中市')}`,
-          { headers: { 'User-Agent': 'case-radar/1.0 (yusheng1386 real-estate tool)' }, signal: AbortSignal.timeout(6000) })).json();
-        for (const x of j) out.push({ label: x.display_name, lat: +x.lat, lng: +x.lon, src: 'OpenStreetMap' });
-      } catch {}
-    }
-    return json(out);
+    if (!String(b.q || '').trim()) return err('請輸入地址或地標');
+    return json(await geocode(b.q));
   }
 
   // ----- 同體系比對錯了（大家共用）：標了之後雷達下次跑會把該案改回可開發 -----

@@ -6,7 +6,10 @@
 //   資料：tools/line-index.js 在 Actions 上傳的 KV line-meta／line-<n>（每區一小份，Worker 不解析大檔）
 //   回覆（reply）不算 LINE 每月推播額度
 // 秘密值：LINE_SECRET（驗簽）、LINE_TOKEN（回覆）、LINE_ALLOW（可以查的 LINE userId，逗號分隔）
+import { findPlace, km } from './geo.mjs';
+
 const PAGE = 8;
+const MAP_MAX = 150;   // 地圖最多標幾件
 const GOOD = 60;   // 「優質」＝分數 ≥60，跟推播門檻一樣（tools/notify.js NOTIFY_SCORE）
 const SITE = 'https://case-radar.yusheng1386.workers.dev';
 
@@ -25,13 +28,14 @@ const HELP = `🏠 案件雷達查詢
 ・屋主在賣、只有屋主（沒有仲介）
 ・新上架（24小時）、這週、這個月
 ・降價、急售、賠售、低於行情
+・附近：東平國小附近、靠近東平路、科博館 開車5分鐘、北屯好事多 2公里內、走路10分鐘（只說附近＝開車約5分鐘）
 ・特色／地點：近捷運、學區、公園、景觀、邊間、採光、陽台、制震、品牌建商、車庫、店面、路名、社區名
 ・排序：最便宜、單價最低、最新、坪數最大（不打＝分數高的先）
 ・同體系：開發預設不列；打「含同體系」一起列（標🔒），「只看同體系」只列
 ・配對：前面加「配對」或「客戶」＝所有在架物件，只要符合就列（不看分數），預設含同體系（「不要同體系」排除）
 例（配對）：「配對 南屯 3房 1500萬以下 平面車位」
 例：「東區優質透天」「屯區 20年內 透天 有車位」「崇德路 3房 最便宜」
-回「更多」看下一頁`;
+回「更多」看下一頁；每次查詢都附地圖連結`;
 
 // 群組區域
 const GROUPS = {
@@ -117,8 +121,35 @@ export function parse(text, districts, main, where = {}) {
   take(/坪數最大|最大坪|坪數大的?先/, () => { q.sort = 'ar'; });
   take(/分數最高|高分的?先/, () => { q.sort = null; });
 
-  // ---- 區域 ----
+  // ---- 附近／車程（地標、路名、社區）----
+  //   「東平國小附近」「科博館 開車5分鐘」「靠近東平路」「北屯好事多 2公里內」→ 以那個點／那條路為中心算直線距離
+  //   市區開車 1 分鐘約直線 400 公尺、走路 1 分鐘約 80 公尺；只說「附近」＝開車 5 分鐘
   const ds = new Set();
+  let dist = null, kmL = '';
+  take(new RegExp(`(?:走路|步行)\\s*${NUM}\\s*分鐘?(?:以下|內)?`), (_, n) => { dist = n * 0.08; kmL = `走路${n}分鐘`; })
+    || take(new RegExp(`(?:開車|車程|騎車|機車)?\\s*${NUM}\\s*分鐘(?:車程)?(?:以下|內)?`), (_, n) => { dist = n * 0.4; kmL = `開車${n}分鐘`; });
+  take(new RegExp(`${NUM}\\s*(?:公里|km)(?:以下|內)?`, 'i'), (_, n) => { dist = +n; kmL = `${n}公里內`; })
+    || take(new RegExp(`${NUM}\\s*(?:公尺|米)(?:以下|內)?`), (_, n) => { dist = n / 1000; kmL = `${n}公尺內`; });
+  let target = null;
+  take(/(?:靠近|鄰近|接近|離)\s*(\S+?)\s*(?:附近|周邊|周圍|旁邊|一帶)?(?=\s|$)/, (_, w) => { target = w; })
+    || take(/(\S+?)\s*(?:附近|周邊|周圍|旁邊|一帶)(?=\s|$)/, (_, w) => { target = w; });
+  const setNear = w => {
+    // 黏在前面的區名／類型拆掉（「太平透天東平國小」）；區公所、區運動中心這種保留區名
+    let t = w;
+    for (let again = true; again;) {
+      again = false;
+      for (const d of [...districts].sort((a, b) => b.length - a.length)) for (const n of [d, d.length >= 3 ? d.replace(/區$/, '') : null]) {
+        if (n && t.startsWith(n) && t.length > n.length + 1 && !/^區?(?:公所|運動中心|圖書館|戶政|衛生所|農會|區民)/.test(t.slice(n.length))) { ds.add(d); t = t.slice(n.length); again = true; }
+      }
+      const m = t.match(/^(電梯大樓|大樓|透天厝|透天|公寓|華廈|別墅|可開發)/);
+      if (m && t.length > m[1].length + 1) { s += ' ' + m[1]; t = t.slice(m[1].length); again = true; }
+    }
+    const k = dist ?? 2;
+    add('near', `${t} ${kmL || '附近'}（直線約${Math.round(k * 10) / 10}公里）`, t, k);
+  };
+  if (target) setNear(target);
+
+  // ---- 區域 ----
   take(/全台中|全市|全部區域|所有區域/, () => districts.forEach(d => ds.add(d)));
   take(/主力[五六]?區|[五六]區/, () => main.forEach(d => ds.add(d)));
   for (const [g, list] of Object.entries(GROUPS)) take(new RegExp(g), () => list.forEach(d => ds.add(d)));
@@ -127,7 +158,8 @@ export function parse(text, districts, main, where = {}) {
     if (!take(new RegExp(d), () => ds.add(d)) && d.length >= 3) take(new RegExp(d.replace(/區$/, '')), () => ds.add(d));
   }
   q.ds = [...ds].filter(d => districts.includes(d));
-  if (!q.ds.length) { q.ds = main.filter(d => districts.includes(d)); q.scope = '主力區'; }
+  if (!q.ds.length && conds.some(c => c.k === 'near')) { q.ds = [...districts]; q.scope = ''; q.nearAuto = true; }   // 範圍內的區 Worker 再算
+  else if (!q.ds.length) { q.ds = main.filter(d => districts.includes(d)); q.scope = '主力區'; }
   else q.scope = q.ds.length > 4 ? `${q.ds.length}區` : q.ds.join('、');
 
   // ---- 單價（先處理，免得被當總價）----
@@ -212,7 +244,14 @@ export function parse(text, districts, main, where = {}) {
   for (let w of s.split(/\s+/)) {
     // 「靠近東平路」「東平路附近」「在崇德路上」→ 東平路
     w = w.replace(/^(?:靠近|鄰近|接近|附近的?|周邊的?|位於|在|近|沿著?)/, '').replace(/(?:附近|周邊|旁邊|一帶|沿線|上|旁|邊)$/, '');
-    if (w.length >= 2 && !/^\d+$/.test(w)) { free.push(w); add('kw', `「${w}」`, w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')); }
+    if (w.length < 2 || /^\d+$/.test(w)) continue;
+    // 有說距離（開車5分鐘、2公里）但沒說「附近」→ 第一個認不得的字就是中心點（「科博館 開車5分鐘」）
+    if (dist != null && !conds.some(c => c.k === 'near')) {
+      setNear(w);
+      if (q.scope === '主力區') { q.ds = [...districts]; q.scope = ''; q.nearAuto = true; }
+      continue;
+    }
+    free.push(w); add('kw', `「${w}」`, w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
   }
   // 沒打區域但打了路名／社區名 → 用地名表找在哪幾區（崇德路在北屯，不在主力五區）；表裡沒有就找全台中
   if (free.length && q.scope === '主力區') {
@@ -225,6 +264,23 @@ export function parse(text, districts, main, where = {}) {
   q.none = q.scope === '主力區' && !conds.length && !q.sort && (q.mode === 'match' || (!q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text))));
   // 配對只打「配對」沒有任何條件 → 主力區幾千件沒意義，回說明
   return q;
+}
+
+// 一組點到中心點（們）的最短直線距離
+function nearKm(c, pts) {
+  let best = Infinity;
+  for (const a of pts) for (const b of c.pts) { const d = km(a, b); if (d < best) best = d; }
+  return best;
+}
+// 案件在地圖上的位置：社區座標；只有路名的取那條路離中心最近的一段（沒有中心就取第一段）
+export function posOf(x, road, center) {
+  if (x.lc) return { ll: x.lc, approx: 0 };
+  if (x.rk == null) return null;
+  const pts = road(x.rk) || [];
+  if (!pts.length) return null;
+  let best = pts[0], bd = Infinity;
+  if (center) for (const a of pts) for (const b of center) { const d = km(a, b); if (d < bd) { bd = d; best = a; } }
+  return { ll: best, approx: 1 };
 }
 
 function test(c, x) {
@@ -247,6 +303,13 @@ function test(c, x) {
     case 'tag': return c.a === '降價' ? x.dr > 0 || x.tg.includes('降價')
       : c.a === '急售' ? x.tg.includes('急售') || x.tg.includes('秒殺')
       : c.a === '低於實登' ? ['低於實登', '標低於行情', '同等級仍低'].some(t => x.tg.includes(t)) : x.tg.includes(c.a);
+    case 'near': {
+      // c.pts：中心點（地標一點、路名多點）；案件位置＝社區座標，沒有就用它那條路（c.road(rk) 回傳那條路的各段）
+      if (!c.pts) return true;
+      if (x.lc) return nearKm(c, [x.lc]) <= c.b;
+      if (x.rk != null) { const m = c.memo || (c.memo = new Map()); if (!m.has(x.rk)) m.set(x.rk, nearKm(c, c.road(x.rk))); return m.get(x.rk) <= c.b; }
+      return false;
+    }
     case 'kw': return (c.re || (c.re = new RegExp(c.a, 'i'))).test(x.t || '');
     case 'fl': {
       if (!x.fl) return false;
@@ -349,6 +412,23 @@ async function answer(env, uid, text) {
   }
   const q = parse(src, meta.districts, meta.main, meta.where || {});
   if (q.none) return HELP;
+  // 案件只有路名時的位置：路名座標表（tools/roads.js → line-index 的 line-roads），附近查詢或畫地圖時才讀
+  let R = null;
+  const roadsOf = async () => R || (R = (await env.BLOBS.get('line-roads', 'json')) || { keys: [], pts: [] });
+  const near = q.conds.find(c => c.k === 'near');
+  if (near) {
+    const rd = await roadsOf();
+    near.road = i => rd.pts[i];
+    near.pts = await locate(env, near.a, rd, q.nearAuto ? null : q.ds, meta.districts, meta.box);
+    if (!near.pts) return `找不到「${near.a}」在哪裡，換個說法試試（例如加上區名、寫全名：「太平東平國小」「北屯好事多」）`;
+    if (q.nearAuto) {
+      // 只讀範圍碰得到的區（各區案件位置外框，tools/line-index.js meta.box）
+      const pad = near.b / 100 + 0.005;
+      q.ds = meta.districts.filter((d, i) => { const b = meta.box?.[i];
+        return b && near.pts.some(([la, ln]) => la >= b[0] - pad && la <= b[2] + pad && ln >= b[1] - pad && ln <= b[3] + pad); });
+      q.scope = q.ds.length <= 4 ? q.ds.join('、') : `${q.ds.length}區`;
+    }
+  }
   const pre = q.mode === 'match' ? 'line-p' : 'line-';
   const parts = await Promise.all(q.ds.map(d => env.BLOBS.get(`${pre}${meta.districts.indexOf(d)}`, 'json')));
   // 配對模式：關鍵字欄位（路名、社區、特色）另存，條件有用到才讀
@@ -358,25 +438,74 @@ async function answer(env, uid, text) {
     ? p.items.map((a, j) => { const o = poolItem(a, meta.pkeys, p.d); if (needT) o.t = tks[i]?.t[j] || ''; return o; })
     : p.items.map(x => (x._d = p.d, x)));
   const res = filter(items, q);
+  // 附近：每件算距離；沒指定排序就近的先
+  let noLoc = 0;
+  if (near) {
+    for (const x of res) x._km = Math.round(nearKm(near, x.lc ? [x.lc] : near.road(x.rk)) * 10) / 10;
+    if (!q.sort) res.sort((a, b) => a._km - b._km);
+    // 其他條件都符合、但沒有位置資料（地址只有區名）的有幾件
+    noLoc = filter(items, q, q.conds.filter(c => c !== near)).filter(x => !x.lc && x.rk == null).length;
+  }
   const sl = res.slice(off, off + PAGE);
-  if (q.mode === 'match') {
-    const need = [...new Set(sl.map(x => x._d))];
-    const tx = await Promise.all(need.map(d => env.BLOBS.get(`line-px${meta.districts.indexOf(d)}`, 'json')));
-    const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
-    for (const x of sl) { [x.n, x.fs, x.ly, x.u] = byD[x._d]?.[x.id] || []; x.x = matchLine(x); }
-  } else {
-    // 只讀這一頁用到的區的顯示文字
-    const need = [...new Set(sl.map(x => x._d))];
-    const tx = await Promise.all(need.map(d => env.BLOBS.get(`line-x${meta.districts.indexOf(d)}`, 'json')));
-    const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
-    for (const x of sl) x.x = x.x || byD[x._d]?.[x.id] || `・${x.sc}分｜${x._d} ${x.p}萬`;
+  // 顯示文字：這一頁＋地圖（最多 MAP_MAX 件）用到的區才讀
+  const mapItems = off ? [] : res.slice(0, MAP_MAX);
+  const show = [...new Set([...sl, ...mapItems])];
+  const need = [...new Set(show.map(x => x._d))];
+  const tx = await Promise.all(need.map(d => env.BLOBS.get(`${q.mode === 'match' ? 'line-px' : 'line-x'}${meta.districts.indexOf(d)}`, 'json')));
+  const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
+  for (const x of show) {
+    if (q.mode === 'match') { [x.n, x.fs, x.ly, x.u] = byD[x._d]?.[x.id] || []; x.x = matchLine(x); }
+    else x.x = x.x || byD[x._d]?.[x.id] || `・${x.sc}分｜${x._d} ${x.p}萬`;
+    if (x._km != null) x.x = x.x.replace('\n', ` 📍${x._km}公里\n`);
+  }
+  // 地圖：案件標在地圖上（社區座標；只有路名的標在那條路離中心最近的一段）
+  let mapUrl = '';
+  if (mapItems.length) {
+    const rd = mapItems.some(x => !x.lc && x.rk != null) ? await roadsOf() : null;
+    const pts = [];
+    for (const x of mapItems) {
+      const pos = posOf(x, i => rd?.pts[i], near?.pts);
+      if (!pos) continue;
+      const lines = x.x.split('\n');
+      const url = (x.x.match(/https?:\/\/\S+/) || [])[0] || '';
+      pts.push([pos.ll[0], pos.ll[1], pos.approx, lines.filter(l => !/^\s*https?:/.test(l)).join('\n').slice(0, 300), x.p ?? null, url,
+        x.sm ? 'sm' : x.own === 2 ? 'own' : x.sc >= GOOD ? 'good' : '']);
+    }
+    if (pts.length) {
+      const tok = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
+      const head = [q.mode === 'match' ? '配對' : '開發', q.scope, ...q.conds.map(c => c.l)].filter(Boolean).join('・');
+      await env.BLOBS.put(`map-${tok}`, JSON.stringify({ t: head, at: meta.at, n: res.length, c: near?.pts?.slice(0, 40) || null, r: near?.b || null, items: pts }),
+        { expirationTtl: 14 * 86400 });
+      mapUrl = `\n🗺 地圖（${pts.length} 件${res.length > pts.length ? `，共 ${res.length} 件` : ''}）：${SITE}/m/${tok}`;
+    }
   }
   // 只有認不得的字、又什麼都沒對到（例如「你好」）→ 回說明
   if (!res.length && q.scope === '全台中' && q.conds.every(c => c.k === 'kw'))
     return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + HELP;
   if (off && off >= res.length) return '已經是最後一頁了';
   await env.BLOBS.put(stKey, JSON.stringify({ text: src, off }), { expirationTtl: 3600 });
-  return page(res, q, off, meta.at, items) + `\n${SITE}/#${q.mode === 'match' ? 'clients' : 'dev'}`;
+  return page(res, q, off, meta.at, items) + (noLoc ? `\n（另有 ${noLoc} 件地址只寫到區，算不出距離）` : '') + mapUrl
+    + `\n${SITE}/#${q.mode === 'match' ? 'clients' : 'dev'}`;
+}
+
+// 中心點：①路名座標表裡的路（整條路的各段）②快取 ③即時定位（內政部／OpenStreetMap：學校、賣場、地標）
+async function locate(env, w, rd, ds, districts, box) {
+  const pts = [];
+  rd.keys.forEach((k, i) => {
+    const [d, r] = k.split('|');
+    const isRoad = w === r || (w.startsWith(r) && /^[一二三四五六七八九十\d]+段$/.test(w.slice(r.length)));
+    if (isRoad && (!ds || ds.includes(d))) pts.push(...rd.pts[i]);
+  });
+  if (pts.length) return pts;
+  const ck = `geo-${w.slice(0, 40)}`;
+  const hit = await env.BLOBS.get(ck, 'json');
+  if (hit) return hit.length ? hit : null;
+  // 有指定區（「北屯好事多」）→ 挑離那區最近的那家
+  const b = ds && ds.length <= 3 && box ? box[districts.indexOf(ds[0])] : null;
+  const g = await findPlace(w, b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null);
+  const out = g ? [g] : [];
+  await env.BLOBS.put(ck, JSON.stringify(out), { expirationTtl: (out.length ? 30 : 1) * 86400 });
+  return out.length ? out : null;
 }
 
 export async function webhook(req, env) {

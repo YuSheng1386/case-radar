@@ -30,9 +30,20 @@ function floors(s) {
 const parkOf = c => c.parking ?? (/車位|車庫/.test(c.title || '') ? 1 : null);
 // 案件池陣列每格的欄位（Worker 依這個還原成物件；f 是秒、tg 沒有標籤時是 0）
 //   關鍵字欄位 t 另存 line-pt<n>（同順序），查詢有路名／特色時才讀
-const PKEYS = ['id', 'ty', 'rt', 'ag', 'p', 'ar', 'r', 'up', 'ma', 'fl', 'pk', 'pt', 'sc', 'own', 'tg', 'f', 'sm'];
+//   lc＝社區座標；沒有社區座標的用 rk＝它那條路在 line-roads 的序號
+const PKEYS = ['id', 'ty', 'rt', 'ag', 'p', 'ar', 'r', 'up', 'ma', 'fl', 'pk', 'pt', 'sc', 'own', 'tg', 'f', 'sm', 'lc', 'rk'];
+const { roadKey } = require('./roads');
+const ll5 = v => v ? [Math.round(v[0] * 1e5) / 1e5, Math.round(v[1] * 1e5) / 1e5] : null;
 
-function build(data, pool = null) {
+function build(data, pool = null, roads = null) {
+  // 位置：社區座標優先；沒有就用路名座標表（tools/roads.js）裡那條路的各段位置
+  const rkeys = [], rpts = [], rix = {};
+  const rk = (d, a) => {
+    const k = roadKey(d, a), v = k && roads?.items[k];
+    if (!v || !v.pts.length) return null;
+    if (!(k in rix)) { rix[k] = rkeys.length; rkeys.push(k); rpts.push(v.pts); }
+    return rix[k];
+  };
   const by = {};
   // 同體系已有的也放進來（sm=1），預設不列；查詢打「含同體系」才一起看
   const LV = { high: '高', mid: '中', low: '低' };
@@ -46,7 +57,7 @@ function build(data, pool = null) {
       // 關鍵字比對用（路名、社區、標題、591 特色標籤：近捷運、明星學區、制震宅…）
       t: `${c.title || ''} ${c.community || ''} ${(c.address || '').replace(/^台中市/, '')} ${(c.features || []).join(' ')}`.replace(/臺/g, '台'),
       sc: c.score, own, g: c.ownerGone ?? null, dr: c.drop || 0, tg: c.tags,
-      f: Date.parse(c.firstSeen) || 0, sm: c._sm ? 1 : 0,
+      f: Date.parse(c.firstSeen) || 0, sm: c._sm ? 1 : 0, lc: ll5(c.ll), rk: c.ll ? null : rk(c.district, c.address),
       x: (c._sm ? `🔒同體系已有（${c.storeCount || '?'}間店・比對可信度${LV[c.level] || c.level || '?'}）\n` : '') + cardLine(c).replace('\n', c.parkType ? ` 🚗${c.parkType.replace(/式$/, '')}車位\n` : c.parking ? ' 🚗含車位\n' : '\n') + (c.ownerGone != null ? `\n  ⚠️屋主刊登已下架${c.ownerGone}天（可能只是廣告到期）` : '')
     });
   }
@@ -59,7 +70,8 @@ function build(data, pool = null) {
     const t = `${(x.t || '').slice(0, 24)} ${x.c || ''} ${(x.a || '').replace(/^台中市\S{1,3}區/, '')} ${(x.ft || []).join(' ')}`.replace(/臺/g, '台').trim();
     (pby[x.d] = pby[x.d] || []).push([x.id, typeOf(x.ty), rt, x.ag ?? null, x.p ?? null, x.ar ?? null, rooms(x.ly),
       x.up ?? null, x.ma ?? null, floors(x.fl), x.pk ?? null, x.pt ? x.pt.replace(/式$/, '') : '',
-      x.sc, x.own || 0, (x.tg || []).length ? x.tg : 0, Math.round((Date.parse(x.f) || 0) / 1000), x.same ? 1 : 0]);
+      x.sc, x.own || 0, (x.tg || []).length ? x.tg : 0, Math.round((Date.parse(x.f) || 0) / 1000), x.same ? 1 : 0,
+      ll5(x.ll), x.ll ? null : rk(x.d, x.a)]);
     (ptk[x.d] = ptk[x.d] || []).push(t);
     (pdisp[x.d] = pdisp[x.d] || {})[x.id] = [x.c || (x.t || '').slice(0, 14), x.fl || '', x.ly || '',
       String(x.u || '').replace('https://sale.591.com.tw/home/house/detail/', '591:')];
@@ -71,9 +83,19 @@ function build(data, pool = null) {
   const road = a => (String(a || '').replace(/^台中市/, '').replace(/^\S{1,3}區/, '').match(/^(.+?(?:路|街|大道))/) || [])[1];
   for (const c of all) { note(road(c.address), c.district); note(c.community, c.district); }
   for (const x of pool?.items || []) { note(road(x.a), x.d); note(x.c, x.d); }
+  // 各區範圍（案件位置的外框）：「科博館 開車5分鐘」時只讀範圍碰得到的區
+  const box = {};
+  const grow = (d, pt) => { const b = box[d] || (box[d] = [90, 180, -90, -180]);
+    b[0] = Math.min(b[0], pt[0]); b[1] = Math.min(b[1], pt[1]); b[2] = Math.max(b[2], pt[0]); b[3] = Math.max(b[3], pt[1]); };
+  const where2 = (d, lc, r) => { if (lc) grow(d, lc); else if (r != null) rpts[r].forEach(pt => grow(d, pt)); };
+  for (const d of Object.keys(by)) for (const it of by[d]) where2(d, it.lc, it.rk);
+  const iLc = PKEYS.indexOf('lc'), iRk = PKEYS.indexOf('rk');
+  for (const d of Object.keys(pby)) for (const a of pby[d]) where2(d, a[iLc], a[iRk]);
   // 篩選欄位和顯示文字分開存：查全台中時只讀篩選欄位，文字只讀要顯示的那一頁
   return {
+    roads: { keys: rkeys, pts: rpts },
     meta: { at: data.generatedAt, districts, main: data.districts, pkeys: PKEYS,
+      box: Object.fromEntries(Object.entries(box).map(([d, b]) => [districts.indexOf(d), b])),
       where: Object.fromEntries(Object.entries(where).map(([w, s]) => [w, [...s]])) },
     parts: districts.map(d => ({ d, items: (by[d] || []).map(({ x, ...r }) => r) })),
     texts: districts.map(d => ({ d, x: Object.fromEntries((by[d] || []).map(it => [it.id, it.x])) })),
@@ -94,7 +116,11 @@ async function main() {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'data.json'), 'utf8'));
   let pool = null;
   try { pool = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'pool.json'), 'utf8')); } catch {}
-  const { meta, parts, texts, pparts, ptexts, pkw } = build(data, pool);
+  let roadsSt = null;
+  try { roadsSt = JSON.parse(fs.readFileSync(path.join(process.env.RADAR_STATE || path.join(ROOT, 'state'), 'roads.json'), 'utf8')); } catch {}
+  const { meta, parts, texts, pparts, ptexts, pkw, roads } = build(data, pool, roadsSt);
+  const located = [...parts.flatMap(x => x.items).filter(it => it.lc || it.rk != null), ...pparts.flatMap(x => x.items).filter(a => a[PKEYS.indexOf('lc')] || a[PKEYS.indexOf('rk')] != null)].length;
+  console.log(`[LINE 索引] 有位置 ${located} 件（社區座標或路名座標）；路 ${roads.keys.length} 條 ${(JSON.stringify(roads).length / 1024).toFixed(0)} KB`);
   const kb = a => (a.reduce((s, p) => s + JSON.stringify(p).length, 0) / 1024).toFixed(0);
   console.log(`[LINE 索引] ${meta.districts.length} 區、${data.cards.length} 件＋同體系 ${(data.blocked || []).length} 件，篩選欄位共 ${kb(parts)} KB；` +
     `案件池 ${pool?.items.length ?? 0} 件 ${kb(pparts)} KB（最大一區 ${(Math.max(...pparts.map(p => JSON.stringify(p).length)) / 1024).toFixed(0)} KB）；地名 ${Object.keys(meta.where).length} 個 ${(JSON.stringify(meta).length / 1024).toFixed(0)} KB`);
@@ -103,6 +129,7 @@ async function main() {
   for (let i = 0; i < parts.length; i++) {
     await put(`line-${i}`, parts[i]); await put(`line-x${i}`, texts[i]); await put(`line-p${i}`, pparts[i]); await put(`line-px${i}`, ptexts[i]); await put(`line-pt${i}`, pkw[i]);
   }
+  await put('line-roads', roads);
   await put('line-meta', meta);   // 每份都帶區名，Worker 讀到對不上的（區域剛增減）會略過
 }
 
