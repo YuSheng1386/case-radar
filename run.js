@@ -284,13 +284,8 @@ async function main() {
     if (!hot) continue;
     // 同體系店家已有 → 不能開發，關鍵字再好也一樣；另列一份給人工抽查比對有沒有誤判
     // 網頁是公開的：只放店數與可信度，不放店家電話
-    if (m) {
-      blocked.push({ id, title: rep.title, district: rep.district, address: rep.address, community: rep.community,
-        price: rep.price, area: rep.area, floor: rep.floor, tags: [...tags], level: m.level, storeCount: m.storeCount,
-        ycUrl: m.url, url: ms[0].url });
-      continue;
-    }
-    cards.push({
+    // 同體系的也存完整欄位：LINE 查詢打「含同體系」時要能一起篩（用戶 10/24）
+    const card = {
       id, ...rep, tags: [...tags], score, why, drop,
       market: mk && { median: mk.median, diff: mk.diff, n: mk.count, level: mk.matchLevel },
       comm: cm && { med: cm.med, n: cm.n, min: cm.min, diff: cm.diff, belowMin: cm.belowMin, recent: cm.recent,
@@ -306,7 +301,9 @@ async function main() {
       features: [...new Set(ms.flatMap(x => x.features || []))],
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
-    });
+    };
+    if (m) blocked.push({ ...card, url: ms[0].url, level: m.level, storeCount: m.storeCount, ycUrl: m.url });
+    else cards.push(card);
   }
   cards.sort((a, b) => b.score - a.score);
 

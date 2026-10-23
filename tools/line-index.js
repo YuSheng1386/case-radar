@@ -29,7 +29,11 @@ const parkOf = c => c.parking ?? (/車位|車庫/.test(c.title || '') ? 1 : null
 
 function build(data) {
   const by = {};
-  for (const c of data.cards) {
+  // 同體系已有的也放進來（sm=1），預設不列；查詢打「含同體系」才一起看
+  const LV = { high: '高', mid: '中', low: '低' };
+  const all = [...data.cards, ...(data.blocked || []).map(b => ({ ...b, _sm: true, score: b.score ?? 0, tags: b.tags || [],
+    sources: b.sources || [{ s: '', url: b.url, price: b.price }] }))];
+  for (const c of all) {
     const own = c.posters?.owner ? (c.posters.agents === 0 ? 2 : 1) : 0;
     (by[c.district] = by[c.district] || []).push({
       id: c.id, ty: typeOf(c.type), rt: c.type || '', ag: c.age ?? null, p: c.price, ar: c.area ?? null, r: rooms(c.layout),
@@ -37,8 +41,8 @@ function build(data) {
       // 關鍵字比對用（路名、社區、標題、591 特色標籤：近捷運、明星學區、制震宅…）
       t: `${c.title || ''} ${c.community || ''} ${(c.address || '').replace(/^台中市/, '')} ${(c.features || []).join(' ')}`.replace(/臺/g, '台'),
       sc: c.score, own, g: c.ownerGone ?? null, dr: c.drop || 0, tg: c.tags,
-      f: Date.parse(c.firstSeen) || 0,
-      x: cardLine(c).replace('\n', c.parkType ? ` 🚗${c.parkType.replace(/式$/, '')}車位\n` : c.parking ? ' 🚗含車位\n' : '\n') + (c.ownerGone != null ? `\n  ⚠️屋主刊登已下架${c.ownerGone}天（可能只是廣告到期）` : '')
+      f: Date.parse(c.firstSeen) || 0, sm: c._sm ? 1 : 0,
+      x: (c._sm ? `🔒同體系已有（${c.storeCount || '?'}間店・比對可信度${LV[c.level] || c.level || '?'}）\n` : '') + cardLine(c).replace('\n', c.parkType ? ` 🚗${c.parkType.replace(/式$/, '')}車位\n` : c.parking ? ' 🚗含車位\n' : '\n') + (c.ownerGone != null ? `\n  ⚠️屋主刊登已下架${c.ownerGone}天（可能只是廣告到期）` : '')
     });
   }
   const districts = Object.keys(by).sort();
@@ -61,7 +65,7 @@ async function main() {
   const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'data.json'), 'utf8'));
   const { meta, parts, texts } = build(data);
   const kb = parts.map(p => JSON.stringify(p).length / 1024);
-  console.log(`[LINE 索引] ${meta.districts.length} 區、${data.cards.length} 件，篩選欄位共 ${kb.reduce((a, b) => a + b, 0).toFixed(0)} KB`);
+  console.log(`[LINE 索引] ${meta.districts.length} 區、${data.cards.length} 件＋同體系 ${(data.blocked || []).length} 件，篩選欄位共 ${kb.reduce((a, b) => a + b, 0).toFixed(0)} KB`);
   if (DRY) return;
   if (!RADAR_URL || !INGEST_KEY) { console.log('[LINE 索引] 缺 RADAR_URL／INGEST_KEY，略過'); return; }
   for (let i = 0; i < parts.length; i++) { await put(`line-${i}`, parts[i]); await put(`line-x${i}`, texts[i]); }

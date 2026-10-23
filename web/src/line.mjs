@@ -27,6 +27,7 @@ const HELP = `🏠 案件雷達查詢
 ・降價、急售、賠售、低於行情
 ・特色／地點：近捷運、學區、公園、景觀、邊間、採光、陽台、制震、品牌建商、車庫、店面、路名、社區名
 ・排序：最便宜、單價最低、最新、坪數最大（不打＝分數高的先）
+・同體系：預設不列；打「含同體系」一起列（標🔒），「只看同體系」只列
 例：「東區優質透天」「屯區 20年內 透天 有車位」「崇德路 3房 最便宜」
 回「更多」看下一頁`;
 
@@ -92,6 +93,10 @@ export function parse(text, districts, main) {
     return hit;
   };
   const add = (k, l, a = null, b = null) => conds.push({ k, l, a, b });
+
+  // ---- 同體系：預設不列（不能開發）；「含同體系」一起列、「只看同體系」只列 ----
+  take(/只(?:看|要|列)(?:同)?體系(?:內的|內|的)?(?:案件|物件)?/, () => { q.sm = 'only'; })
+    || take(/(?:包含|含|加上|也要|連)(?:同)?體系(?:內的|內|的)?(?:案件|物件)?(?:也要|一起)?|(?:同)?體系(?:內的|內|的)?(?:也要|一起)/, () => { q.sm = 'inc'; });
 
   // ---- 排序 ----
   take(/最便宜|便宜的先|總價(?:最)?低|價格低到高|由低到高/, () => { q.sort = 'p'; });
@@ -198,7 +203,7 @@ export function parse(text, districts, main) {
   // 沒打區域但打了路名／社區名 → 找全台中（崇德路在北屯，不在主力五區）
   if (free && q.scope === '主力五區') { q.ds = [...districts]; q.scope = '全台中'; }
   // 什麼都沒打（例如「你好」只會剩關鍵字「你好」）→ 回說明
-  q.none = q.scope === '主力五區' && !conds.length && !q.sort && !/可開發|案件|全部|列出|有哪些/.test(String(text));
+  q.none = q.scope === '主力五區' && !conds.length && !q.sort && !q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text));
   return q;
 }
 
@@ -243,7 +248,8 @@ const SORTS = { p: (a, b) => (a.p ?? 1e9) - (b.p ?? 1e9), up: (a, b) => (a.up ??
 const SORT_L = { p: '總價低的先', up: '單價低的先', f: '最新上架的先', ar: '坪數大的先' };
 
 export function filter(items, q, conds = q.conds) {
-  return items.filter(x => conds.every(c => test(c, x))).sort((a, b) => (q.sort ? SORTS[q.sort](a, b) : 0) || b.sc - a.sc);
+  const smOk = x => q.sm === 'inc' || (q.sm === 'only' ? x.sm : !x.sm);
+  return items.filter(x => smOk(x) && conds.every(c => test(c, x))).sort((a, b) => (q.sort ? SORTS[q.sort](a, b) : 0) || b.sc - a.sc);
 }
 
 // 查不到 → 每次拿掉一個條件，看各有幾件
@@ -254,7 +260,7 @@ export function relax(items, q) {
 export function page(res, q, off, at, items) {
   const t = new Date(Date.parse(at) + 8 * 3600e3);
   const when = `${t.getUTCMonth() + 1}/${t.getUTCDate()} ${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}`;
-  const head = [q.scope, ...q.conds.map(c => c.l)].join('・');
+  const head = [q.scope, ...q.conds.map(c => c.l), ...(q.sm ? [q.sm === 'only' ? '只看同體系' : '含同體系'] : [])].join('・');
   if (!res.length) {
     const rx = items ? relax(items, q) : [];
     return `${head}\n目前沒有符合的可開發案件（資料 ${when}）` +
