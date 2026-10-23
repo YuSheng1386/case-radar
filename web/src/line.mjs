@@ -201,7 +201,7 @@ function test(c, x) {
   const inR = v => v != null && (c.a == null || v >= c.a) && (c.b == null || v <= c.b);
   switch (c.k) {
     case 'ty': return x.ty === c.a;
-    case 'rt': return x.rt.includes(c.a);
+    case 'rt': return (x.rt || '').includes(c.a);
     case 'sc': return x.sc >= c.a;
     case 'age': return inR(x.ag);
     case 'p': return inR(x.p);
@@ -215,7 +215,7 @@ function test(c, x) {
     case 'tag': return c.a === '降價' ? x.dr > 0 || x.tg.includes('降價')
       : c.a === '急售' ? x.tg.includes('急售') || x.tg.includes('秒殺')
       : c.a === '低於實登' ? ['低於實登', '標低於行情', '同等級仍低'].some(t => x.tg.includes(t)) : x.tg.includes(c.a);
-    case 'kw': return (c.re || (c.re = new RegExp(c.a, 'i'))).test(x.t);
+    case 'kw': return (c.re || (c.re = new RegExp(c.a, 'i'))).test(x.t || '');
     case 'fl': {
       if (!x.fl) return false;
       const [lo, hi] = x.fl;
