@@ -302,6 +302,8 @@ async function main() {
       posters: { total: ms.length, agents: agentCount, owner },
       ownerGone,
       parking: ms.some(x => x.hasCarport) ? 1 : ms.some(x => String(x.source).startsWith('591')) ? 0 : null,
+      parkType: (ms.find(x => x.carModel) || {}).carModel || null,
+      features: [...new Set(ms.flatMap(x => x.features || []))],
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     });

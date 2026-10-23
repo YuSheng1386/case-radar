@@ -33,12 +33,12 @@ function build(data) {
     const own = c.posters?.owner ? (c.posters.agents === 0 ? 2 : 1) : 0;
     (by[c.district] = by[c.district] || []).push({
       id: c.id, ty: typeOf(c.type), rt: c.type || '', ag: c.age ?? null, p: c.price, ar: c.area ?? null, r: rooms(c.layout),
-      up: c.unitPrice ?? null, ma: c.mainArea ?? null, fl: floors(c.floor), pk: parkOf(c),
-      // 關鍵字比對用（路名、社區、標題裡的特色：近捷運、邊間、景觀…）
-      t: `${c.title || ''} ${c.community || ''} ${(c.address || '').replace(/^台中市/, '')}`.replace(/臺/g, '台'),
+      up: c.unitPrice ?? null, ma: c.mainArea ?? null, fl: floors(c.floor), pk: parkOf(c), pt: c.parkType || '',
+      // 關鍵字比對用（路名、社區、標題、591 特色標籤：近捷運、明星學區、制震宅…）
+      t: `${c.title || ''} ${c.community || ''} ${(c.address || '').replace(/^台中市/, '')} ${(c.features || []).join(' ')}`.replace(/臺/g, '台'),
       sc: c.score, own, g: c.ownerGone ?? null, dr: c.drop || 0, tg: c.tags,
       f: Date.parse(c.firstSeen) || 0,
-      x: cardLine(c) + (c.ownerGone != null ? `\n  ⚠️屋主刊登已下架${c.ownerGone}天（可能只是廣告到期）` : '')
+      x: cardLine(c).replace('\n', c.parkType ? ` 🚗${c.parkType.replace(/式$/, '')}車位\n` : c.parking ? ' 🚗含車位\n' : '\n') + (c.ownerGone != null ? `\n  ⚠️屋主刊登已下架${c.ownerGone}天（可能只是廣告到期）` : '')
     });
   }
   const districts = Object.keys(by).sort();
