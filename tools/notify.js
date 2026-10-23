@@ -73,7 +73,7 @@ async function main() {
   const firstRun = !st.init;
 
   // ---- 1. 開發：新出現的好案 ----
-  const qual = data.cards.filter(c => !c.wide && (ownerOnly(c) || c.score >= NOTIFY_SCORE));
+  const qual = data.cards.filter(c => !c.wide && c.ownerGone == null && (ownerOnly(c) || c.score >= NOTIFY_SCORE));
   const newCards = qual.filter(c => !st.cards[c.id]);
   for (const c of qual) st.cards[c.id] = st.cards[c.id] || now;
   const qualIds = new Set(qual.map(c => c.id));

@@ -49,5 +49,9 @@ jobs:
           LINE_TO: ${{ secrets.LINE_TO }}
         run: node tools/notify.js
 
+      # LINE 對話查詢用的每區精簡索引（官方帳號打「東區優質透天」就從這裡篩）
+      - name: LINE 查詢索引
+        run: node tools/line-index.js
+
       - name: 上傳到網站
         run: node tools/sync.js push

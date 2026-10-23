@@ -91,10 +91,11 @@ function srcLinks(c) {
   const p = c.posters || { total: c.sources.length, agents: 0, owner: false };
   const who = p.owner && p.agents === 0 ? '<span class="who own">只有屋主自己在賣</span>'
     : `<span class="who${p.agents >= 5 ? ' many' : ''}">${p.owner ? '屋主＋' : ''}${p.agents} 位仲介在刊</span>`;
-  const link = s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.s)} ${s.price ?? ''}${s.agent ? '・' + esc(s.agent.replace(/^仲介/, '')) : ''}</a>`;
+  const link = s => `<a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.s)} ${s.price ?? ''}${s.agent ? '・' + esc(s.agent.replace(/^仲介/, '')) : ''}${s.gone != null ? `（已下架${s.gone}天）` : ''}</a>`;
+  const gone = c.ownerGone != null ? `<span class="who many">屋主刊登已下架 ${c.ownerGone} 天，可能只是廣告到期</span>` : '';
   const ss = c.sources.slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9));
   const more = ss.length > 4 ? `<details class="more"><summary>其他 ${ss.length - 4} 筆</summary>${ss.slice(4).map(link).join(' ')}</details>` : '';
-  return who + ss.slice(0, 4).map(link).join('') + more;
+  return gone + who + ss.slice(0, 4).map(link).join('') + more;
 }
 
 function mkLine(c) {

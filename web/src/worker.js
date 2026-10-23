@@ -4,9 +4,11 @@
 //   GitHub Actions：/api/ingest/*（帶 X-Ingest-Key）上傳案件資料與爬蟲狀態
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
+import { webhook as lineWebhook } from './line.mjs';
+
 const SESSION_DAYS = 30;
 const PBKDF2_ITER = 20000;
-const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7])$/;
+const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7]|line-(meta|\d{1,2}))$/;
 const CLIENT_STATUSES = ['sent', 'liked', 'disliked', 'visit_req', 'booked', 'visited', 'offer', 'dropped'];
 const DEV_STATUSES = ['未聯絡', '已聯絡', '約見面', '簽委託', '放棄'];
 
@@ -75,6 +77,8 @@ export default {
         // 注意要用 /share 不是 /share.html：靜態檔服務會把 .html 307 轉址到 /share，客人就拿不到 token
         return env.ASSETS.fetch(new Request(new URL('/share', url), req));
       }
+      // LINE 官方帳號對話查詢（LINE 平台打過來，用 LINE_SECRET 驗簽）
+      if (p === '/api/line/webhook' && m === 'POST') return await lineWebhook(req, env);
       if (p.startsWith('/api/')) return await api(req, env, url, p, m);
       return env.ASSETS.fetch(req);
     } catch (e) {

@@ -30,6 +30,9 @@ const save = (f, d) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.
 // 永慶／信義資料取自地政系統，欄位最可信；仲介手打的平台排後面
 const TRUST = ['信義', '永慶', '住商', '東森', '5168', '591'];
 const trustRank = s => { const i = TRUST.indexOf(s); return i < 0 ? 99 : i; };
+// 屋主刊登下架常常只是廣告到期，屋主不一定賣掉了（用戶 10/24）→ 先保留 30 天，仍可開發；仲介刊登下架照舊
+const OWNER_KEEP_DAYS = 30;
+const ownerGoneDays = rec => rec.removedAt && rec.d?.isOwner ? (Date.now() - Date.parse(rec.removedAt)) / 864e5 : null;
 
 // 網址可用的穩定 id：平台代碼＋平台物件編號（591 與 591全市 是同一個編號空間）
 const SRC_CODE = { '591': 'a', '591全市': 'a', '5168': 'f', '信義': 's', '住商': 'h', '東森': 'e' };
@@ -119,9 +122,9 @@ async function main() {
       runLog.sources[src].warn = `筆數 ${list.length} 遠低於上次 ${prev.count}，不判下架`;
     }
   }
-  // 下架超過 14 天的刪掉，控制檔案大小
+  // 下架超過 14 天的刪掉，控制檔案大小（屋主刊登留 OWNER_KEEP_DAYS 天）
   for (const [key, rec] of Object.entries(tracker.items)) {
-    if (rec.removedAt && Date.now() - Date.parse(rec.removedAt) > 14 * 864e5) delete tracker.items[key];
+    if (rec.removedAt && Date.now() - Date.parse(rec.removedAt) > (rec.d?.isOwner ? OWNER_KEEP_DAYS : 14) * 864e5) delete tracker.items[key];
   }
 
   // ---- 3. 同體系店家清單（full 才更新）----
@@ -197,11 +200,13 @@ async function main() {
 
   // ---- 5. 組合：去重 → 標籤 → 行情 → 同體系 → 分數 ----
   const active = [];
+  //   同一戶只要還有任何一個平台／仲介在刊就照常列；下架的屋主刊登也放進去一起去重（保住「屋主在賣」）
   for (const [key, rec] of Object.entries(tracker.items)) {
-    if (rec.removedAt || !rec.d) continue;
+    const gone = ownerGoneDays(rec);
+    if ((rec.removedAt && (gone == null || gone > OWNER_KEEP_DAYS)) || !rec.d) continue;
     const hi = Math.max(...rec.prices.map(p => p[1]));
     const cur = rec.d.price;
-    active.push({ ...rec.d, _key: key, _first: rec.first,
+    active.push({ ...rec.d, _key: key, _first: rec.first, _gone: gone,
       _drop: cur && hi > cur ? Math.round((hi - cur) / hi * 1000) / 10 : 0,
       _hist: rec.prices.slice(-6) });
   }
@@ -248,7 +253,11 @@ async function main() {
     const owner = ms.some(x => x.isOwner);
     const ownerOnly = owner && ms.every(x => x.isOwner);
     const agentCount = new Set(ms.filter(x => !x.isOwner).map(x => x.agent || x.source)).size;
+    // 全部刊登都已下架（只剩屋主下架的）→ 照樣列，標下架幾天
+    const allGone = ms.every(x => x._gone != null);
+    const ownerGone = allGone ? Math.floor(Math.min(...ms.map(x => x._gone))) : null;
     if (ownerOnly) { score += 8; why.push('只有屋主在賣+8'); }
+    if (allGone) why.push(`屋主刊登已下架${ownerGone}天（可能只是廣告到期）`);
     if (agentCount >= 5) { score -= 5; why.push(`${agentCount}位仲介在刊-5`); }
     // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；屋主刊登的都列
     const hot = score >= (cfg.minScore ?? 20) || owner;
@@ -261,8 +270,8 @@ async function main() {
     let m = core.matchSameSystem(rep, storeIdx);
     if (m && overrides.has(id)) { m = null; why.push('同體系比對經人工確認不是同一戶'); }
 
-    // 案件池（給客需配對）：所有在架物件，精簡欄位
-    pool.push({ id, t: rep.title, d: rep.district, a: rep.address, c: rep.community, p: rep.price, up: rep.unitPrice,
+    // 案件池（給客需配對）：所有在架物件，精簡欄位（全部下架的不推給客人）
+    if (!allGone) pool.push({ id, t: rep.title, d: rep.district, a: rep.address, c: rep.community, p: rep.price, up: rep.unitPrice,
       ar: rep.area, fl: rep.floor, ag: rep.age, ly: rep.layout, ty: rep.type, ph: rep.photo,
       u: (ms.find(x => x.source !== '591') || ms[0]).url, s: [...new Set(ms.map(x => x.source))],
       sc: score, tg: [...tags], cm: cm ? cm.diff : null, pd: ps ? ps.diff : null, same: m ? 1 : 0, f: first, own: owner ? (ownerOnly ? 2 : 1) : 0,
@@ -288,9 +297,10 @@ async function main() {
         url: `https://market.591.com.tw/${commId}` },
       peer: ps && { diff: ps.diff, med: ps.med, n: ps.n, comms: ps.comms, level: ps.level },
       bargain: bg || null,
-      sources: ms.map(m => ({ s: m.source, url: m.url, price: m.price, agent: m.agent || '', hist: m._hist })),
+      sources: ms.map(m => ({ s: m.source, url: m.url, price: m.price, agent: m.agent || '', hist: m._hist, ...(m._gone != null && { gone: Math.floor(m._gone) }) })),
       // 幾個人在賣：屋主自己刊、沒有仲介 = 最好開發；十幾個仲介 = 大概是一般約、競爭激烈
       posters: { total: ms.length, agents: agentCount, owner },
+      ownerGone,
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     });
