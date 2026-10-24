@@ -113,9 +113,10 @@ async function put(name, obj) {
 }
 
 async function main() {
-  const data = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'data.json'), 'utf8'));
+  const DOCS = process.env.RADAR_DOCS || path.join(ROOT, 'docs');   // 本機補傳可指到 tools/fetch-latest.sh 下載的資料
+  const data = JSON.parse(fs.readFileSync(path.join(DOCS, 'data.json'), 'utf8'));
   let pool = null;
-  try { pool = JSON.parse(fs.readFileSync(path.join(ROOT, 'docs', 'pool.json'), 'utf8')); } catch {}
+  try { pool = JSON.parse(fs.readFileSync(path.join(DOCS, 'pool.json'), 'utf8')); } catch {}
   let roadsSt = null;
   try { roadsSt = JSON.parse(fs.readFileSync(path.join(process.env.RADAR_STATE || path.join(ROOT, 'state'), 'roads.json'), 'utf8')); } catch {}
   const { meta, parts, texts, pparts, ptexts, pkw, roads } = build(data, pool, roadsSt);

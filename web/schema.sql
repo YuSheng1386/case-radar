@@ -95,3 +95,10 @@ CREATE TABLE IF NOT EXISTS match_alerts (
 CREATE INDEX IF NOT EXISTS idx_clients_owner ON clients(owner_id);
 CREATE INDEX IF NOT EXISTS idx_ci_status ON client_items(status);
 CREATE INDEX IF NOT EXISTS idx_shares_client ON shares(client_id);
+
+-- LINE 索引、查詢地圖、翻頁、地點快取（web/src/store.mjs；KV 每天只能寫 1000 次，這些寫入頻繁改放 D1）
+CREATE TABLE IF NOT EXISTS blobs (
+  k   TEXT PRIMARY KEY,
+  v   TEXT NOT NULL,
+  exp INTEGER            -- 過期時間（秒）；NULL＝不過期
+);

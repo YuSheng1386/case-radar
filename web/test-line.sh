@@ -6,11 +6,13 @@ cd "$(dirname "$0")"
 P=/tmp/wr-line; rm -rf $P; mkdir -p $P
 PORT=8798; B=http://127.0.0.1:$PORT
 printf 'INGEST_KEY=k\nLINE_SECRET=s\nLINE_TOKEN=t\nLINE_ALLOW=Utest\n' > .dev.vars
+npx wrangler d1 execute radar-db --local --persist-to $P --file=schema.sql >/dev/null 2>&1   # LINE 索引存 D1 blobs
 npx wrangler dev --local --persist-to $P --port $PORT > /tmp/wr-line.log 2>&1 &
 DEV=$!
 for i in $(seq 1 30); do curl -s $B/ >/dev/null 2>&1 && break; sleep 1; done
 ok() { echo "  ✓ $1"; }; bad() { echo "  ✗ $1"; FAIL=1; }; FAIL=0
-(cd .. && RADAR_URL=$B INGEST_KEY=k node tools/line-index.js) | grep -q 區 && ok "上傳 LINE 索引" || bad "上傳索引"
+(cd .. && RADAR_URL=$B INGEST_KEY=k node tools/line-index.js) 2>&1 | grep -q 失敗 && bad "上傳索引" || ok "上傳 LINE 索引"
+curl -s -H 'X-Ingest-Key: k' $B/api/ingest/blob/line-meta | grep -q '"districts"' && ok "索引存進 D1、讀得回來" || bad "D1 讀不到索引"
 sig() { printf '%s' "$1" | openssl dgst -sha256 -hmac s -binary | base64; }
 EV='{"events":[{"type":"message","replyToken":"r","source":{"userId":"Utest"},"message":{"type":"text","text":"東區優質透天"}}]}'
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H 'x-line-signature: bad' -d "$EV")" = 401 ] && ok "錯簽章 401" || bad "錯簽章沒擋"

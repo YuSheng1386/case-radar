@@ -6,6 +6,7 @@
 
 import { webhook as lineWebhook } from './line.mjs';
 import { geocode } from './geo.mjs';
+import { store } from './store.mjs';
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITER = 20000;
@@ -82,7 +83,7 @@ export default {
       // LINE 查詢結果地圖（公開、連結本身就是鑰匙，14 天失效）：頁面 /m/<token>，資料 /api/map/<token>
       if (m === 'GET' && /^\/m\/[a-f0-9]{24}$/.test(p)) return env.ASSETS.fetch(new Request(new URL('/map', url), req));
       if (m === 'GET' && (r0 = p.match(/^\/api\/map\/([a-f0-9]{24})$/))) {
-        const v = await env.BLOBS.get(`map-${r0[1]}`, 'text');
+        const v = await store(env).get(`map-${r0[1]}`);
         return v ? new Response(v, { headers: { 'Content-Type': 'application/json; charset=utf-8' } }) : err('地圖連結已失效', 404);
       }
       // LINE 官方帳號對話查詢（LINE 平台打過來，用 LINE_SECRET 驗簽）
@@ -103,6 +104,12 @@ async function api(req, env, url, p, m) {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     const name = r[1];
     if (!BLOB_NAMES.test(name)) return err('bad name');
+    // LINE 索引（每次排程 ~220 份）存 D1，不吃 KV 每天 1000 次寫入額度（web/src/store.mjs）
+    if (name.startsWith('line-')) {
+      const S = store(env);
+      if (m === 'PUT') { await S.put(name, await req.text()); if (name === 'line-meta') await S.sweep(); return json({ ok: true }); }
+      if (m === 'GET') { const v = await S.get(name); return v ? new Response(v, { headers: { 'Content-Type': 'application/json; charset=utf-8' } }) : err('not found', 404); }
+    }
     if (m === 'PUT') {
       await env.BLOBS.put(name, req.body, { metadata: { at: new Date().toISOString(), size: Number(req.headers.get('Content-Length') || 0) } });
       return json({ ok: true });
@@ -135,12 +142,12 @@ async function api(req, env, url, p, m) {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     return json((await env.DB.prepare('SELECT item_id FROM same_override').all()).results.map(x => x.item_id));
   }
-  // 推播用地圖（tools/notify.js 新案件）：存 KV map-<token> 14 天，回傳 token；頁面 /m/<token>
+  // 推播用地圖（tools/notify.js 新案件）：存 map-<token> 14 天（D1 blobs），回傳 token；頁面 /m/<token>
   if (p === '/api/ingest/map' && m === 'POST') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     const b = await body(req);
     const tok = randHex(12);
-    await env.BLOBS.put(`map-${tok}`, JSON.stringify({ t: String(b.t || '').slice(0, 100), at: b.at, n: +b.n || 0, c: null, r: null,
+    await store(env).put(`map-${tok}`, JSON.stringify({ t: String(b.t || '').slice(0, 100), at: b.at, n: +b.n || 0, c: null, r: null,
       items: (b.items || []).slice(0, 200) }), { expirationTtl: 14 * 86400 });
     return json({ token: tok });
   }

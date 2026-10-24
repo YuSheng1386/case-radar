@@ -7,6 +7,7 @@
 //   回覆（reply）不算 LINE 每月推播額度
 // 秘密值：LINE_SECRET（驗簽）、LINE_TOKEN（回覆）、LINE_ALLOW（可以查的 LINE userId，逗號分隔）
 import { findPlace, km } from './geo.mjs';
+import { store } from './store.mjs';
 
 const PAGE = 8;
 const MAP_MAX = 150;   // 地圖最多標幾件
@@ -398,15 +399,16 @@ export function matchLine(x) {
 }
 
 async function answer(env, uid, text) {
+  const S = store(env);
   const t = text.trim();
   if (/^(說明|help|\?|？|怎麼用|指令|用法)$/i.test(t)) return HELP;
-  const meta = await env.BLOBS.get('line-meta', 'json');
+  const meta = await S.get('line-meta', 'json');
   if (!meta) return '還沒有資料，等下一次排程更新後再試';
   // 「更多」：重新解析上一次的查詢文字，從下一頁開始（資料更新過也照新的排）
   const stKey = `lq-${uid}`;
   let src = t, off = 0;
   if (/^(更多|下一頁|more|下頁|繼續)$/i.test(t)) {
-    const st = await env.BLOBS.get(stKey, 'json');
+    const st = await S.get(stKey, 'json');
     if (!st) return '沒有上一次的查詢，直接打條件，例如「東區優質透天」';
     src = st.text; off = st.off + PAGE;
   }
@@ -414,12 +416,12 @@ async function answer(env, uid, text) {
   if (q.none) return HELP;
   // 案件只有路名時的位置：路名座標表（tools/roads.js → line-index 的 line-roads），附近查詢或畫地圖時才讀
   let R = null;
-  const roadsOf = async () => R || (R = (await env.BLOBS.get('line-roads', 'json')) || { keys: [], pts: [] });
+  const roadsOf = async () => R || (R = (await S.get('line-roads', 'json')) || { keys: [], pts: [] });
   const near = q.conds.find(c => c.k === 'near');
   if (near) {
     const rd = await roadsOf();
     near.road = i => rd.pts[i];
-    near.pts = await locate(env, near.a, rd, q.nearAuto ? null : q.ds, meta.districts, meta.box);
+    near.pts = await locate(S, near.a, rd, q.nearAuto ? null : q.ds, meta.districts, meta.box);
     if (!near.pts) return `找不到「${near.a}」在哪裡，換個說法試試（例如加上區名、寫全名：「太平東平國小」「北屯好事多」）`;
     if (q.nearAuto) {
       // 只讀範圍碰得到的區（各區案件位置外框，tools/line-index.js meta.box）
@@ -430,10 +432,10 @@ async function answer(env, uid, text) {
     }
   }
   const pre = q.mode === 'match' ? 'line-p' : 'line-';
-  const parts = await Promise.all(q.ds.map(d => env.BLOBS.get(`${pre}${meta.districts.indexOf(d)}`, 'json')));
+  const parts = await Promise.all(q.ds.map(d => S.get(`${pre}${meta.districts.indexOf(d)}`, 'json')));
   // 配對模式：關鍵字欄位（路名、社區、特色）另存，條件有用到才讀
   const needT = q.mode === 'match' && q.conds.some(c => c.k === 'kw' || c.k === 'pkt' || c.k === 'pkn');
-  const tks = needT ? await Promise.all(q.ds.map(d => env.BLOBS.get(`line-pt${meta.districts.indexOf(d)}`, 'json'))) : [];
+  const tks = needT ? await Promise.all(q.ds.map(d => S.get(`line-pt${meta.districts.indexOf(d)}`, 'json'))) : [];
   const items = parts.flatMap((p, i) => !p || p.d !== q.ds[i] ? [] : q.mode === 'match'
     ? p.items.map((a, j) => { const o = poolItem(a, meta.pkeys, p.d); if (needT) o.t = tks[i]?.t[j] || ''; return o; })
     : p.items.map(x => (x._d = p.d, x)));
@@ -451,7 +453,7 @@ async function answer(env, uid, text) {
   const mapItems = off ? [] : res.slice(0, MAP_MAX);
   const show = [...new Set([...sl, ...mapItems])];
   const need = [...new Set(show.map(x => x._d))];
-  const tx = await Promise.all(need.map(d => env.BLOBS.get(`${q.mode === 'match' ? 'line-px' : 'line-x'}${meta.districts.indexOf(d)}`, 'json')));
+  const tx = await Promise.all(need.map(d => S.get(`${q.mode === 'match' ? 'line-px' : 'line-x'}${meta.districts.indexOf(d)}`, 'json')));
   const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
   for (const x of show) {
     if (q.mode === 'match') { [x.n, x.fs, x.ly, x.u] = byD[x._d]?.[x.id] || []; x.x = matchLine(x); }
@@ -474,7 +476,7 @@ async function answer(env, uid, text) {
     if (pts.length) {
       const tok = [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
       const head = [q.mode === 'match' ? '配對' : '開發', q.scope, ...q.conds.map(c => c.l)].filter(Boolean).join('・');
-      await env.BLOBS.put(`map-${tok}`, JSON.stringify({ t: head, at: meta.at, n: res.length, c: near?.pts?.slice(0, 40) || null, r: near?.b || null, items: pts }),
+      await S.put(`map-${tok}`, JSON.stringify({ t: head, at: meta.at, n: res.length, c: near?.pts?.slice(0, 40) || null, r: near?.b || null, items: pts }),
         { expirationTtl: 14 * 86400 });
       mapUrl = `\n🗺 地圖（${pts.length} 件${res.length > pts.length ? `，共 ${res.length} 件` : ''}）：${SITE}/m/${tok}`;
     }
@@ -483,13 +485,13 @@ async function answer(env, uid, text) {
   if (!res.length && q.scope === '全台中' && q.conds.every(c => c.k === 'kw'))
     return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + HELP;
   if (off && off >= res.length) return '已經是最後一頁了';
-  await env.BLOBS.put(stKey, JSON.stringify({ text: src, off }), { expirationTtl: 3600 });
+  await S.put(stKey, JSON.stringify({ text: src, off }), { expirationTtl: 3600 });
   return page(res, q, off, meta.at, items) + (noLoc ? `\n（另有 ${noLoc} 件地址只寫到區，算不出距離）` : '') + mapUrl
     + `\n${SITE}/#${q.mode === 'match' ? 'clients' : 'dev'}`;
 }
 
 // 中心點：①路名座標表裡的路（整條路的各段）②快取 ③即時定位（內政部／OpenStreetMap：學校、賣場、地標）
-async function locate(env, w, rd, ds, districts, box) {
+async function locate(S, w, rd, ds, districts, box) {
   const pts = [];
   rd.keys.forEach((k, i) => {
     const [d, r] = k.split('|');
@@ -498,13 +500,13 @@ async function locate(env, w, rd, ds, districts, box) {
   });
   if (pts.length) return pts;
   const ck = `geo-${w.slice(0, 40)}`;
-  const hit = await env.BLOBS.get(ck, 'json');
+  const hit = await S.get(ck, 'json');
   if (hit) return hit.length ? hit : null;
   // 有指定區（「北屯好事多」）→ 挑離那區最近的那家
   const b = ds && ds.length <= 3 && box ? box[districts.indexOf(ds[0])] : null;
   const g = await findPlace(w, b ? [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2] : null);
   const out = g ? [g] : [];
-  await env.BLOBS.put(ck, JSON.stringify(out), { expirationTtl: (out.length ? 30 : 1) * 86400 });
+  await S.put(ck, JSON.stringify(out), { expirationTtl: (out.length ? 30 : 1) * 86400 });
   return out.length ? out : null;
 }
 
