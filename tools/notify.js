@@ -45,6 +45,16 @@ const ownerOnly = c => c.posters && c.posters.owner && c.posters.agents === 0;
 // 照「字」切，不照 UTF-16 切：.slice 會把標題裡的 emoji 切成半個，LINE 收到不合法的文字整則拒收（10/24 查詢沒回應就是這個）
 const cut = (s, n) => Array.from(String(s || '')).slice(0, n).join('');
 // 每件一行：分數＋物件，下一行列出「為什麼值得看」的全部理由（用戶 10/21：不要只貼一個標籤像在分類）
+// 各平台網址，開價最低的先（推播時 pickLinks 會跳過失效的）
+const srcUrls = c => (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9)).map(s => s.url).filter(Boolean);
+// 傳出前測連結：c._url 設成第一個還在的；全部失效照樣推（優質案件不能漏），改附網站案件頁；回傳失效件數
+async function pickLinks(cards) {
+  const { pickAlive, deadNote } = await import('../web/src/linkcheck.mjs');
+  const got = await Promise.all(cards.map(c => pickAlive(srcUrls(c))));
+  cards.forEach((c, i) => { c._url = got[i] ?? deadNote(SITE, c.id); });
+  return got.filter(u => u === null).length;
+}
+
 const cardLine = c => {
   const why = [];
   if (ownerOnly(c)) why.push('只有屋主在賣');
@@ -54,7 +64,7 @@ const cardLine = c => {
   if (c.drop >= 2) why.push(`降價${c.drop}%`);
   // 自售／低於實登／同等級仍低 上面已寫成具體數字；降價有實測降幅時也已寫過
   for (const t of c.tags || []) if (!['自售', '低於實登', '同等級仍低', '降價'].includes(t) || (t === '降價' && !(c.drop >= 2))) why.push(t === '標低於行情' ? '標示低於行情' : t);
-  const url = (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9))[0]?.url || '';
+  const url = c._url ?? srcUrls(c)[0] ?? '';
   return `・${c.score}分｜${c.district} ${c.community || cut(c.title, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}\n  ${[...new Set(why)].join('・') || '分數高'}\n  ${url}`;
 };
 
@@ -141,6 +151,11 @@ async function main() {
   // ---- 3. 合併成一則 LINE ----
   const cardById = Object.fromEntries(data.cards.map(c => [c.id, c]));
   const pc = st.pending.cards.map(id => cardById[id]).filter(c => c && qualIds.has(c.id)); // 已下架或不再符合的就不推
+  // 傳出前測連結：同一案多個平台時傳打得開的那個
+  if (pc.length) {
+    const dead = await pickLinks(pc);
+    if (dead) console.log(`[通知] ${dead} 件各平台連結都打不開，改附網站案件頁`);
+  }
   const pcl = Object.values(st.pending.clients).filter(x => x.items.length);
   st.init = st.init || now;
   if (!pc.length && !pcl.length) { st.pending.cards = []; return save(st); }
@@ -222,4 +237,4 @@ async function main() {
 function save(st) { fs.mkdirSync(STATE, { recursive: true }); fs.writeFileSync(F, JSON.stringify(st)); }
 
 if (require.main === module) main().catch(e => { console.error('[通知] 失敗（不影響雷達）:', e.message); });
-module.exports = { cardLine, cut };
+module.exports = { cardLine, cut, srcUrls };

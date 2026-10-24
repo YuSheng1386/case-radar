@@ -7,7 +7,9 @@
 //   本機看：node tools/line-index.js --dry
 const fs = require('fs');
 const path = require('path');
-const { cardLine, cut } = require('./notify');
+const { cardLine, cut, srcUrls } = require('./notify');
+// 591 網址壓成「591:」開頭省空間（web/src/line.mjs url591 還原）
+const z = u => String(u || '').replace(/^https:\/\/sale\.591\.com\.tw\/home\/house\/detail\/(?:2\/)?/, '591:');
 
 const ROOT = path.join(__dirname, '..');
 const { RADAR_URL, INGEST_KEY } = process.env;
@@ -57,6 +59,7 @@ function build(data, pool = null, roads = null) {
       // 關鍵字比對用（路名、社區、標題、591 特色標籤：近捷運、明星學區、制震宅…）
       t: `${c.title || ''} ${c.community || ''} ${(c.address || '').replace(/^台中市/, '')} ${(c.features || []).join(' ')}`.replace(/臺/g, '台'),
       sc: c.score, own, g: c.ownerGone ?? null, dr: c.drop || 0, tg: c.tags,
+      ...(srcUrls(c).length > 1 && { ua: srcUrls(c).slice(1).map(z) }),   // 其他平台網址（x 裡放開價最低的那個；傳出前測連結用）
       f: Date.parse(c.firstSeen) || 0, sm: c._sm ? 1 : 0, lc: ll5(c.ll), rk: c.ll ? null : rk(c.district, c.address),
       x: (c._sm ? `🔒同體系已有（${c.storeCount || '?'}間店・比對可信度${LV[c.level] || c.level || '?'}）\n` : '') + cardLine(c).replace('\n', c.parkType ? ` 🚗${c.parkType.replace(/式$/, '')}車位\n` : c.parking ? ' 🚗含車位\n' : '\n') + (c.ownerGone != null ? `\n  ⚠️屋主刊登已下架${c.ownerGone}天（可能只是廣告到期）` : '')
     });
@@ -74,7 +77,7 @@ function build(data, pool = null, roads = null) {
       ll5(x.ll), x.ll ? null : rk(x.d, x.a)]);
     (ptk[x.d] = ptk[x.d] || []).push(t);
     (pdisp[x.d] = pdisp[x.d] || {})[x.id] = [x.c || cut(x.t, 14),x.fl || '', x.ly || '',
-      String(x.u || '').replace(/^https:\/\/sale\.591\.com\.tw\/home\/house\/detail\/(?:2\/)?/, '591:')];
+      z(x.u), ...(x.us?.length > 1 ? [x.us.filter(u => u !== x.u).map(z)] : [])];   // 第 5 個：其他平台網址（傳出前測連結用）
   }
   const districts = [...new Set([...Object.keys(by), ...Object.keys(pby)])].sort();
   // 路名／社區名 → 在哪幾區（沒打區域、只打「東平路」時只讀那幾區，不用讀全台中）

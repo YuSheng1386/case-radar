@@ -8,6 +8,7 @@
 // 秘密值：LINE_SECRET（驗簽）、LINE_TOKEN（回覆）、LINE_ALLOW（可以查的 LINE userId，逗號分隔）
 import { findPlace, km } from './geo.mjs';
 import { store } from './store.mjs';
+import { pickAlive, deadNote } from './linkcheck.mjs';
 
 const PAGE = 8;
 const MAP_MAX = 150;   // 地圖最多標幾件
@@ -481,8 +482,10 @@ export function poolItem(a, keys, d) {
 }
 
 // 配對模式每件一行（案件池沒有預先排好的文字）：總價先，客人最在意
+// 索引裡 591 網址壓成「591:」開頭（tools/line-index.js）
+const url591 = u => String(u || '').replace(/^591:/, 'https://sale.591.com.tw/home/house/detail/2/');
 export function matchLine(x) {
-  const url = String(x.u || '').replace(/^591:/, 'https://sale.591.com.tw/home/house/detail/2/');
+  const url = url591(x.u);
   const bits = [x.ar != null ? `${x.ar}坪` : '', x.fs, x.ly, x.ag != null ? `屋齡${x.ag}年` : '', x.pt ? `🚗${x.pt.replace(/式$/, '')}車位` : x.pk ? '🚗含車位' : ''].filter(Boolean);
   return `${x.sm ? '🔒同體系 ' : ''}・${x.p ?? '—'}萬｜${x._d} ${x.n || ''}\n  ${bits.join(' ')}${x.own === 2 ? '・只有屋主在賣' : x.own ? '・有屋主在賣' : ''}\n  ${url}`;
 }
@@ -549,8 +552,18 @@ export async function answerFor(S, uid, text) {
   const tx = await Promise.all(need.map(d => S.get(`${q.mode === 'match' ? 'line-px' : 'line-x'}${meta.districts.indexOf(d)}`, 'json')));
   const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
   for (const x of show) {
-    if (q.mode === 'match') { [x.n, x.fs, x.ly, x.u] = byD[x._d]?.[x.id] || []; x.x = matchLine(x); }
+    if (q.mode === 'match') [x.n, x.fs, x.ly, x.u, x.ua] = byD[x._d]?.[x.id] || [];
     else x.x = x.x || byD[x._d]?.[x.id] || `・${x.sc}分｜${x._d} ${x.p}萬`;
+  }
+  // 傳出前測連結（這一頁）：同一案多個平台時傳打得開的那個；全部失效照樣列，改附網站案件頁
+  await Promise.all(sl.map(async x => {
+    const cur = q.mode === 'match' ? url591(x.u) : (String(x.x).match(/https?:\/\/\S+/) || [])[0];
+    if (!cur) return;
+    const got = (await pickAlive([cur, ...(x.ua || []).map(url591)])) ?? deadNote(SITE, x.id);
+    if (q.mode === 'match') x.u = got; else x.x = x.x.replace(cur, got);
+  }));
+  for (const x of show) {
+    if (q.mode === 'match') x.x = matchLine(x);
     if (x._km != null) x.x = x.x.replace('\n', ` 📍${x._km}公里\n`);
   }
   // 地圖：案件標在地圖上（社區座標；只有路名的標在那條路離中心最近的一段）

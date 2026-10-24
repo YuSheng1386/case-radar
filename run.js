@@ -273,9 +273,11 @@ async function main() {
     if (m && overrides.has(id)) { m = null; why.push('同體系比對經人工確認不是同一戶'); }
 
     // 案件池（給客需配對）：所有在架物件，精簡欄位（全部下架的不推給客人）
+    //   us：各平台網址（非 591 優先），LINE 傳出前測連結，打不開的換下一個
+    const us = [...new Set([ms.find(x => x.source !== '591'), ...ms].filter(Boolean).map(x => x.url).filter(Boolean))];
     if (!allGone) pool.push({ id, t: rep.title, d: rep.district, a: rep.address, c: rep.community, p: rep.price, up: rep.unitPrice,
       ar: rep.area, fl: rep.floor, ag: rep.age, ly: rep.layout, ty: rep.type, ph: rep.photo,
-      u: (ms.find(x => x.source !== '591') || ms[0]).url, s: [...new Set(ms.map(x => x.source))],
+      u: us[0], ...(us.length > 1 && { us }), s: [...new Set(ms.map(x => x.source))],
       sc: score, tg: [...tags], cm: cm ? cm.diff : null, pd: ps ? ps.diff : null, same: m ? 1 : 0, f: first, own: owner ? (ownerOnly ? 2 : 1) : 0,
       // 車位：591 有欄位；其他平台不知道 → null（配對時「要車位」不會因此被刷掉）
       pk: ms.some(x => x.hasCarport) ? 1 : ms.some(x => x.source === '591') ? 0 : null,

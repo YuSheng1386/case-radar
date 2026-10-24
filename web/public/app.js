@@ -81,7 +81,7 @@ function route() {
   const h = location.hash.slice(1) || 'dev';
   const [k, arg] = h.split('/');
   document.querySelectorAll('nav.tabs a').forEach(a => a.classList.toggle('on', a.dataset.k === (k === 'client' ? 'clients' : k)));
-  const views = { dev: viewDev, clients: viewClients, client: viewClient, visits: viewVisits, users: viewUsers, me: viewMe };
+  const views = { dev: viewDev, case: viewCase, clients: viewClients, client: viewClient, visits: viewVisits, users: viewUsers, me: viewMe };
   const main = $('#main'); main.onclick = main.onchange = null; window._redrawMatch = null; // 換頁時清掉上一頁的事件
   (views[k] || viewDev)(arg).catch(e => { $('#main').innerHTML = `<div class="empty">${esc(e.message)}</div>`; });
 }
@@ -185,6 +185,28 @@ async function viewDev() {
   };
   $('#list').onkeydown = async e => { if (e.key === 'Enter' && e.target.closest('.devrow')) await saveDev(e.target.closest('.devrow'), data, dev); };
   draw();
+}
+
+// 單一案件（#case/<id>）：LINE 推播／查詢時各平台刊登都打不開，改連到這裡看案件資料（用戶 10/24：優質案件不能因此漏掉）
+async function viewCase(id) {
+  $('#main').innerHTML = '<div class="empty">載入案件…</div>';
+  const [data, pool, devRows] = await Promise.all([blob('cards'), blob('pool'), api('/api/dev')]);
+  const dev = Object.fromEntries(devRows.map(r => [r.item_id, r]));
+  const note = '<div class="empty">⚠️ 這件的平台刊登可能已下架（或連結失效），以下是雷達最後抓到的資料；可以到 591 搜尋社區名或地址確認是否還在賣</div>';
+  const c = data.cards.find(x => x.id === id) || (data.blocked || []).find(x => x.id === id);
+  if (c && c.sources) {
+    $('#main').innerHTML = note + `<div id="list">${devCard(c, dev[c.id])}</div>`;
+    $('#list').onchange = async e => { const row = e.target.closest('.devrow'); if (row && (e.target.tagName === 'SELECT' || e.target.type === 'date')) await saveDev(row, data, dev); };
+    return;
+  }
+  const it = pool.items.find(x => x.id === id);
+  if (!it) { $('#main').innerHTML = '<div class="empty">找不到這件（可能已經從雷達移除）</div>'; return; }
+  $('#main').innerHTML = note + `<div class="card"><img loading="lazy" src="${esc(it.ph)}" alt="" onerror="this.style.visibility='hidden'"><div>
+    <div class="ttl">${esc(it.c || it.t || it.a)}</div><div class="meta">${esc(it.t || '')}</div>
+    <div class="price">${it.p ?? '—'} 萬 <span class="meta">${it.up ? it.up + ' 萬/坪' : ''}</span></div>
+    <div class="meta">${esc(it.d)}｜${esc(it.a)}｜${it.ar ?? '—'} 坪｜${esc(it.fl || '—')}｜${it.ag != null && it.ag !== '' ? esc(it.ag) + ' 年' : '屋齡—'}｜${esc(it.ly || it.ty || '')}</div>
+    <div class="why">${(it.us || [it.u]).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">刊登連結</a>`).join('｜')}｜${esc((it.s || []).join('、'))}</div>
+  </div></div>`;
 }
 
 async function saveDev(row, data, dev) {
