@@ -21,6 +21,8 @@ const NOTIFY_SCORE = +(process.env.NOTIFY_SCORE || 60);
 const MATCH_MIN = +(process.env.MATCH_MIN || 30);
 const PER_CLIENT_MAX = 10;     // 每位客戶每次最多記幾件新配對（避免資料大變動時洗版）
 const LINE_RESERVE = 10;       // 本月額度留給手動／其他用途
+// 累積幾次排程才推一次（用戶 10/24：每次照常更新新案，LINE 兩次合併推一則；推 2 人額度會加倍）
+const NOTIFY_EVERY = Math.max(1, +(process.env.NOTIFY_EVERY || 2));
 const SITE = (RADAR_URL || 'https://case-radar.yusheng1386.workers.dev').replace(/\/$/, '');
 
 const load = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
@@ -58,10 +60,13 @@ async function lineQuota() {
   return { left: q.value - u.totalUsage, limit: q.value, used: u.totalUsage };
 }
 
+// LINE_TO 可以逗號分隔多人（10/24 加玟靜）→ 一人用 push、多人用 multicast；額度照人數算（每人 1 則）
+const TO = String(LINE_TO || '').split(',').map(s => s.trim()).filter(Boolean);
 async function linePush(text) {
-  const r = await fetch('https://api.line.me/v2/bot/message/push', {
+  const multi = TO.length > 1;
+  const r = await fetch(`https://api.line.me/v2/bot/message/${multi ? 'multicast' : 'push'}`, {
     method: 'POST', headers: { Authorization: `Bearer ${LINE_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to: LINE_TO, messages: [{ type: 'text', text: cut(text, 4900) }] })
+    body: JSON.stringify({ to: multi ? TO : TO[0], messages: [{ type: 'text', text: cut(text, 4900) }] })
   });
   if (!r.ok) throw new Error(`LINE 推播失敗 HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
 }
@@ -166,23 +171,30 @@ async function main() {
   msg += `\n${SITE}/#${pc.length ? 'dev' : 'clients'}`;
 
   if (DRY) { console.log('----- LINE 訊息預覽 -----\n' + msg); st.pending = { cards: [], clients: {} }; return save(st); }
-  if (!LINE_TOKEN || !LINE_TO) { console.log('[通知] 沒設 LINE_TOKEN／LINE_TO，只寫網站不推'); st.pending = { cards: [], clients: {} }; return save(st); }
+  if (!LINE_TOKEN || !TO.length) { console.log('[通知] 沒設 LINE_TOKEN／LINE_TO，只寫網站不推'); st.pending = { cards: [], clients: {} }; return save(st); }
+  // 有新的但還沒累積到 NOTIFY_EVERY 次 → 先存著（網站已照常更新），下一次排程合併推
+  if ((st.wait || 0) + 1 < NOTIFY_EVERY) {
+    st.wait = (st.wait || 0) + 1;
+    console.log(`[通知] 有新的，累積第 ${st.wait}／${NOTIFY_EVERY} 次，下次排程合併推`);
+    return save(st);
+  }
 
-  // 額度：本月剩餘平均到月底，每天最多推幾則；今天用完就先存著
+  // 額度：本月剩餘平均到月底，每天最多用幾則；今天用完就先存著。推給 n 個人算 n 則（used／perDay 都是「則」）
   try {
     const q = await lineQuota();
     const day = twDate();
-    const used = st.pushes[day] || 0;
+    const used = st.pushes[day] || 0, n = TO.length;
     const daysLeft = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth() + 1, 0)).getUTCDate() - t.getUTCDate() + 1;
-    const perDay = q.left === Infinity ? 99 : Math.max(0, Math.floor((q.left - LINE_RESERVE + used) / daysLeft));
-    if (used >= perDay || q.left <= LINE_RESERVE) {
-      console.log(`[通知] 今天推播額度已用完（今天 ${used}／每天 ${perDay}，本月剩 ${q.left}），先存著下次合併`);
+    const perDay = q.left === Infinity ? 99 * n : Math.max(0, Math.floor((q.left - LINE_RESERVE + used) / daysLeft));
+    if (used + n > perDay || q.left - n < LINE_RESERVE) {
+      console.log(`[通知] 今天推播額度已用完（今天 ${used}／每天 ${perDay} 則，${n} 人，本月剩 ${q.left}），先存著下次合併`);
       return save(st);
     }
     await linePush(msg);
-    st.pushes = { [day]: used + 1 };   // 只留今天
+    st.pushes = { [day]: used + n };   // 只留今天
     st.pending = { cards: [], clients: {} };
-    console.log(`[通知] 已推 LINE（今天第 ${used + 1}／${perDay} 則，本月剩 ${q.left - 1}）`);
+    st.wait = 0;
+    console.log(`[通知] 已推 LINE ${n} 人（今天用 ${used + n}／${perDay} 則，本月剩 ${q.left - n}）`);
   } catch (e) {
     console.error('[通知]', e.message, '— 下次再推');
   }

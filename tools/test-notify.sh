@@ -25,5 +25,12 @@ echo "$OUT" | grep -q '新的可開發】2 件' && ok "LINE 摘要含新可開�
 # 非乾跑、沒有 LINE 金鑰：寫網站
 node -e 'const f=process.argv[1];const s=require(f);Object.keys(s.clients[7].ids).slice(0,2).forEach(k=>delete s.clients[7].ids[k]);require("fs").writeFileSync(f,JSON.stringify(s))' $S/notify.json
 node tools/notify.js | grep -q '只寫網站不推' && [ "$(cat $S/posted)" = 2 ] && ok "沒設 LINE 時新配對寫到網站" || bad "寫網站"
+# 推給 2 人＋累積 2 次才推（假 LINE：tools/fake-line.js）
+export FAKE_LINE_LOG=$S/line.log LINE_TOKEN=t LINE_TO=Ua,Ub NOTIFY_EVERY=2
+newcards() { node -e 'const f=process.argv[1];const s=require(f);Object.keys(s.cards).slice(0,2).forEach(k=>delete s.cards[k]);require("fs").writeFileSync(f,JSON.stringify(s))' $S/notify.json; }
+newcards; node -r ./tools/fake-line.js tools/notify.js | grep -q '累積第 1／2 次' && [ ! -s $S/line.log ] && ok "第 1 次有新案：先存著不推" || bad "累積第 1 次"
+OUT=$(node -r ./tools/fake-line.js tools/notify.js)
+[ "$(cat $S/line.log 2>/dev/null)" = "multicast 2" ] && echo "$OUT" | grep -q '已推 LINE 2 人' && ok "第 2 次：multicast 推 2 人、額度算 2 則" || bad "第 2 次：$OUT｜$(cat $S/line.log 2>/dev/null)"
+node -r ./tools/fake-line.js tools/notify.js >/dev/null; [ "$(wc -l < $S/line.log)" = 1 ] && ok "推完沒新的不再推" || bad "重複推"
 kill $SRV
 [ $FAIL = 0 ] && echo "全部通過"

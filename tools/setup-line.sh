@@ -6,7 +6,8 @@
 #   1. Channel secret／access token → 網站（LINE_SECRET、LINE_TOKEN）＋ GitHub（LINE_TOKEN，推播用）
 #   2. 自動把 webhook 網址設成網站 /api/line/webhook 並開啟
 #   3. 你傳一句話給新帳號 → 它回你的 LINE ID → 貼回來 → 網站查詢名單（LINE_ALLOW）＋ GitHub 推播對象（LINE_TO）
-#   之後要加同事：bash tools/setup-line.sh allow <你的ID>,<同事ID>
+#   之後要加同事：bash tools/setup-line.sh allow <你的ID>,<同事ID>（會把推播對象重設成第一個 ID）
+#   推播也給同事：bash tools/setup-line.sh push <你的ID>,<同事ID>（allow 之後再跑）
 set -e
 cd "$(dirname "$0")/.."
 GH=~/.local/bin/gh; R=YuSheng1386/case-radar
@@ -18,6 +19,8 @@ allow() {
   echo "✓ 查詢名單 $(echo "$1" | tr ',' '\n' | wc -l) 人；推播對象＝第一個 ID"
 }
 if [ "$1" = allow ]; then allow "$2"; exit; fi
+# 改新案推播對象（可多人，逗號分隔；每多一人每次推播多用 1 則額度）：bash tools/setup-line.sh push <ID>,<ID>
+if [ "$1" = push ]; then printf '%s' "$2" | $GH secret set LINE_TO -R $R; echo "✓ 新案推播 $(echo "$2" | tr ',' '\n' | wc -l) 人"; exit; fi
 
 read -rsp 'Channel secret（Basic settings 頁）：' SECRET; echo
 read -rsp 'Channel access token（Messaging API 頁，long-lived）：' TOKEN; echo
