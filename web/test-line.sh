@@ -19,6 +19,10 @@ EV='{"events":[{"type":"message","replyToken":"r","source":{"userId":"Utest"},"m
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV")" -d "$EV")" = 200 ] && ok "正確簽章 200（查詢＋回覆）" || bad "正確簽章失敗"
 EV2='{"events":[{"type":"message","replyToken":"r","source":{"userId":"Ux"},"message":{"type":"text","text":"太平"}}]}'
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV2")" -d "$EV2")" = 200 ] && ok "名單外的人 200（只回 ID）" || bad "名單外"
+EV3='{"events":[{"type":"follow","replyToken":"r","source":{"userId":"Utest"}}]}'
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV3")" -d "$EV3")" = 200 ] && ok "加好友 200（歡迎訊息＋範例按鈕）" || bad "加好友"
+# 假 token → LINE 應回 401；回 400 代表訊息格式錯（例如範例按鈕欄位不對）
+sleep 1; grep -q 'LINE reply 失敗 400' /tmp/wr-line.log && bad "LINE 說訊息格式錯：$(grep -m1 'LINE reply 失敗 400' /tmp/wr-line.log)" || ok "訊息格式 LINE 沒退（假 token 只回 401）"
 grep -iE "error|exception" /tmp/wr-line.log | grep -v "api.line.me" | head -3
 kill $DEV 2>/dev/null; rm -f .dev.vars
 [ $FAIL = 0 ] && echo "全部通過" || { echo "有失敗，看 /tmp/wr-line.log"; exit 1; }

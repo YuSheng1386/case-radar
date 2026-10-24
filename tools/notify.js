@@ -32,6 +32,8 @@ const H = { 'X-Ingest-Key': INGEST_KEY || '' };
 function hashPrefs(s) { let h = 0; for (const ch of String(s)) h = (h * 31 + ch.charCodeAt(0)) | 0; return String(h); }
 
 const ownerOnly = c => c.posters && c.posters.owner && c.posters.agents === 0;
+// 照「字」切，不照 UTF-16 切：.slice 會把標題裡的 emoji 切成半個，LINE 收到不合法的文字整則拒收（10/24 查詢沒回應就是這個）
+const cut = (s, n) => Array.from(String(s || '')).slice(0, n).join('');
 // 每件一行：分數＋物件，下一行列出「為什麼值得看」的全部理由（用戶 10/21：不要只貼一個標籤像在分類）
 const cardLine = c => {
   const why = [];
@@ -43,7 +45,7 @@ const cardLine = c => {
   // 自售／低於實登／同等級仍低 上面已寫成具體數字；降價有實測降幅時也已寫過
   for (const t of c.tags || []) if (!['自售', '低於實登', '同等級仍低', '降價'].includes(t) || (t === '降價' && !(c.drop >= 2))) why.push(t === '標低於行情' ? '標示低於行情' : t);
   const url = (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9))[0]?.url || '';
-  return `・${c.score}分｜${c.district} ${c.community || c.title.slice(0, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}\n  ${[...new Set(why)].join('・') || '分數高'}\n  ${url}`;
+  return `・${c.score}分｜${c.district} ${c.community || cut(c.title, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}\n  ${[...new Set(why)].join('・') || '分數高'}\n  ${url}`;
 };
 
 async function lineQuota() {
@@ -59,7 +61,7 @@ async function lineQuota() {
 async function linePush(text) {
   const r = await fetch('https://api.line.me/v2/bot/message/push', {
     method: 'POST', headers: { Authorization: `Bearer ${LINE_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to: LINE_TO, messages: [{ type: 'text', text: text.slice(0, 4900) }] })
+    body: JSON.stringify({ to: LINE_TO, messages: [{ type: 'text', text: cut(text, 4900) }] })
   });
   if (!r.ok) throw new Error(`LINE 推播失敗 HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
 }
@@ -190,4 +192,4 @@ async function main() {
 function save(st) { fs.mkdirSync(STATE, { recursive: true }); fs.writeFileSync(F, JSON.stringify(st)); }
 
 if (require.main === module) main().catch(e => { console.error('[通知] 失敗（不影響雷達）:', e.message); });
-module.exports = { cardLine };
+module.exports = { cardLine, cut };

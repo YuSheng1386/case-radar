@@ -16,27 +16,53 @@ const SITE = 'https://case-radar.yusheng1386.workers.dev';
 
 const HELP = `🏠 案件雷達查詢
 直接打字，條件可以混著用：
-・區域：太平、東區、南屯大里、屯區、海線、山城、舊市區、三屯、全台中（不打＝主力區：南屯、南區、西區、東區、大里、太平；打路名或社區名＝全台中）
+・區域：太平、東區、南屯大里、屯區、海線、山城、舊市區、三屯、全台中（不打＝主力區：南屯、南區、西區、東區、大里、太平、北屯、西屯；打路名或社區名＝全台中）
 ・類型：大樓、華廈、公寓、透天、別墅、套房
-・總價：1500萬以下、1000-2000萬、1500萬左右
+・總價：1500萬以下、1000-2000萬、1500萬左右、一千五百萬內、2000以下
 ・單價：單價30萬以下
 ・坪數：30坪以上、25-35坪、主建物20坪以上
-・格局：3房、2-3房、4房以上
-・屋齡：10年內、少於10年、10-20年、30年以上、新成屋、老屋
-・樓層：1樓、5樓以上、高樓層、低樓層、頂樓
+・格局：3房、2-3房、4房以上、4房+、大於四房
+・屋齡：10年內、少於10年、10-20年、20年左右、30年以上、新成屋、老屋
+・樓層：1樓、5樓以上、高樓層、低樓層、頂樓、不要頂樓、不要1樓
 ・車位：有車位、平面車位、機械車位、坡道平面、雙車位、不要機械車位、不要車位
 ・優質（分數≥${GOOD}）、分數80以上
 ・屋主在賣、只有屋主（沒有仲介）
 ・新上架（24小時）、這週、這個月
 ・降價、急售、賠售、低於行情
-・附近：東平國小附近、靠近東平路、科博館 開車5分鐘、北屯好事多 2公里內、走路10分鐘（只說附近＝開車約5分鐘）
+・附近：東平國小附近、靠近東平路、離太平運動場近一點、科博館 開車5分鐘、北屯好事多 2公里內、走路10分鐘（只說附近＝開車約5分鐘）
 ・特色／地點：近捷運、學區、公園、景觀、邊間、採光、陽台、制震、品牌建商、車庫、店面、路名、社區名
 ・排序：最便宜、單價最低、最新、坪數最大（不打＝分數高的先）
 ・同體系：開發預設不列；打「含同體系」一起列（標🔒），「只看同體系」只列
 ・配對：前面加「配對」或「客戶」＝所有在架物件，只要符合就列（不看分數），預設含同體系（「不要同體系」排除）
 例（配對）：「配對 南屯 3房 1500萬以下 平面車位」
 例：「東區優質透天」「屯區 20年內 透天 有車位」「崇德路 3房 最便宜」
-回「更多」看下一頁；每次查詢都附地圖連結`;
+回「更多」看下一頁；每次查詢都附地圖連結；打「範例」看常用問法`;
+
+// 加好友的第一則（看完就會用；完整條件打「說明」）
+const WELCOME = `👋 歡迎使用案件雷達
+直接打字問，像跟同事講話一樣，條件可以混著打：
+
+🔎 找開發案（預設，有競爭力的才列）
+「東區優質透天」
+「太平 30年內 透天 4房以上」
+「南屯 1500萬以下 3房 有車位」
+
+📍 找某個地方附近
+「太平運動場附近 透天」
+「科博館 開車5分鐘 大樓」
+「靠近東平路 公寓」
+
+🤝 幫客人配對（所有在架物件）
+前面加「配對」：「配對 大里 2000萬內 透天」
+
+・回「更多」看下一頁，每次都附地圖
+・打「說明」看全部條件（價格、坪數、樓層、車位、屋主自售、降價…）
+・不用打完整，「少於30年」「大於四房」「2000以下」都看得懂
+
+下面的按鈕點了就能試 👇`;
+// 範例按鈕（LINE quick reply，最多 13 個，標籤 20 字內）
+const QUICK = ['東區優質透天', '太平 30年內 透天 4房以上', '南屯 1500萬以下 3房 有車位', '太平運動場附近 透天', '配對 大里 2000萬內 透天', '屋主自售 這週', '說明']
+  .map(t => ({ type: 'action', action: { type: 'message', label: t.slice(0, 20), text: t } }));
 
 // 群組區域
 const GROUPS = {
@@ -59,8 +85,9 @@ const FEATURES = [
   [/制震|防震|隔震/, '制震宅', '制震|防震|隔震'], [/品牌建商|知名建商|大建商/, '品牌建商', '品牌建商|知名建商'], [/有?陽台/, '有陽台', '陽台']
 ];
 // 認不得但沒意義的字（不當關鍵字）
-const STOP = ['可開發', '開發', '案件', '物件', '房子', '房屋', '我要', '我想', '幫我', '請', '想找', '想要', '想看', '找', '列出', '列表', '全部', '所有',
-  '有哪些', '有什麼', '推薦', '看看', '一下', '給我', '查詢', '區域', '台中市', '台中', '還有', '在賣', '出售', '的', '嗎', '呢', '吧', '喔'];
+const STOP = ['可開發', '開發', '案件', '物件', '房子', '房屋', '我要', '我想', '幫我', '請', '想找', '想要', '想看', '想買', '要找', '找', '列出', '列表', '全部', '所有',
+  '有沒有', '有哪些', '有什麼', '推薦', '看看', '一下', '給我', '查詢', '區域', '台中市', '台中', '還有', '在賣', '出售', '的話', '一點', '比較', '以及',
+  '不要', '以外', '的', '嗎', '呢', '吧', '喔', '啊', '和', '跟'];
 
 // 中文數字（二十年、三房、五樓）→ 阿拉伯數字；只換後面接單位的，避免「七期」「三民路」被改掉
 function cnum(s) {
@@ -70,21 +97,43 @@ function cnum(s) {
     const [a, b] = m.split('十');
     return (a ? D[a] : 1) * 10 + (b ? D[b] : 0);
   };
-  return s.replace(/([一二兩三四五六七八九]?十[一二三四五六七八九]?|[一二兩三四五六七八九])(?=\s*(?:年|房|樓|坪|萬|千萬|億|天|週|個月|廳|衛))/g, m => String(v(m)));
+  // 「一千五百萬」「兩千萬」「一千二百萬」（有千／百的大數字）
+  const big = m => {
+    let n = 0, cur = 0;
+    for (const ch of m) {
+      if (ch in D) cur = D[ch];
+      else { const u = { 十: 10, 百: 100, 千: 1000 }[ch]; n += (cur || 1) * u; cur = 0; }
+    }
+    return n + cur;
+  };
+  return s.replace(/[一二兩三四五六七八九][一二兩三四五六七八九十百千零]*[百千][一二兩三四五六七八九十百千零]*(?=\s*萬)/g, m => String(big(m)))
+    .replace(/([一二兩三四五六七八九]?十[一二三四五六七八九]?|[一二兩三四五六七八九])(?=\s*(?:年|房|樓|坪|萬|千萬|億|天|週|個月|廳|衛))/g, m => String(v(m)));
 }
 
+const U = '(年|萬|坪|房|樓)';
 function normalize(text) {
   return cnum(String(text).normalize('NFKC').replace(/臺/g, '台').replace(/\s+/g, ' ').trim())
     .replace(/[，,、;；]/g, ' ')
     .replace(/(\d)\s*[wW](?![a-z])/g, '$1萬')
     .replace(/(\d+(?:\.\d+)?)\s*億/g, (_, n) => `${+n * 10000}萬`)
     .replace(/(\d+(?:\.\d+)?)\s*千萬/g, (_, n) => `${+n * 1000}萬`)
-    .replace(/(\d)\s*[~～到至]\s*(\d)/g, '$1-$2')
+    // 「1500萬到2000萬」「20~30年」→「1500-2000萬」（左邊的單位拿掉，右邊保留）
+    .replace(new RegExp(`(\\d)\\s*${U}?\\s*[~～到至]\\s*(\\d)`, 'g'), '$1-$3')
     // 「少於10年」「超過30坪」「不到1500萬」→「10年以下」「30坪以上」
-    .replace(/(?:少於|小於|低於|不到|未滿|不超過|不超出|<)\s*(\d+(?:\.\d+)?)\s*(年|萬|坪|房|樓)?/g, (_, n, u) => `${n}${u || ''}以下`)
-    .replace(/(?:大於|超過|高於|多於|至少|>)\s*(\d+(?:\.\d+)?)\s*(年|萬|坪|房|樓)?/g, (_, n, u) => `${n}${u || ''}以上`)
-    .replace(/(\d|年|萬|坪|房|樓)\s*(?:以內|之內|內)/g, '$1以下');
+    .replace(new RegExp(`(?:少於|小於|低於|不到|未滿|不超過|不超出|最多|<)\\s*(\\d+(?:\\.\\d+)?)\\s*${U}?`, 'g'), (_, n, u) => `${n}${u || ''}以下`)
+    .replace(new RegExp(`(?:大於|超過|高於|多於|至少|最少|>)\\s*(\\d+(?:\\.\\d+)?)\\s*${U}?`, 'g'), (_, n, u) => `${n}${u || ''}以上`)
+    // 「4房+」「4房起」「4房(含)以上」「四房或以上」「30年(含)以內」
+    .replace(new RegExp(`(\\d)\\s*${U}\\s*(?:\\+|起|up|(?:\\(含\\)|含|或)\\s*以上|以上\\s*\\(含\\))`, 'gi'), '$1$2以上')
+    .replace(new RegExp(`(\\d)\\s*${U}\\s*(?:(?:\\(含\\)|含|或)\\s*(?:以下|以內|之內)|(?:以下|以內)\\s*\\(含\\))`, 'g'), '$1$2以下')
+    .replace(/(\d|年|萬|坪|房|樓)\s*(?:以內|之內|內)/g, '$1以下')
+    // 沒寫單位的價格：「2000以下」「1500-2000」「預算2000」→ 萬（三位數以上才算，免得「30以下」被當價格）
+    .replace(/(?<![\d.])(\d{3,5})\s*(?=以下|以上|左右|上下)/g, '$1萬')
+    .replace(/(?<![\d.])(\d{3,5})\s*-\s*(\d{3,5})(?![\d.]|\s*(?:萬|坪|年|樓|房|公尺|米|分|km|公里))/gi, '$1-$2萬')
+    .replace(/平車/g, '平面車位');
 }
+
+// 附近的中心點後面黏著別的條件時從這裡切開（「靠近太平運動場透天4房」→ 太平運動場＋透天4房）
+const CUT = /\d|透天|電梯|大樓|公寓|華廈|別墅|套房|車位|屋齡|優質|屋主|自售|急售|降價|賠售|新上架|最便宜|可開發|的/;
 
 const NUM = String.raw`(\d+(?:\.\d+)?)`;
 const range = (a, b, u) => a != null && b != null ? `${a}–${b}${u}` : a != null ? `≥${a}${u}` : `≤${b}${u}`;
@@ -131,22 +180,47 @@ export function parse(text, districts, main, where = {}) {
     || take(new RegExp(`(?:開車|車程|騎車|機車)?\\s*${NUM}\\s*分鐘(?:車程)?(?:以下|內)?`), (_, n) => { dist = n * 0.4; kmL = `開車${n}分鐘`; });
   take(new RegExp(`${NUM}\\s*(?:公里|km)(?:以下|內)?`, 'i'), (_, n) => { dist = +n; kmL = `${n}公里內`; })
     || take(new RegExp(`${NUM}\\s*(?:公尺|米)(?:以下|內)?`), (_, n) => { dist = n / 1000; kmL = `${n}公尺內`; });
-  let target = null;
-  take(/(?:靠近|鄰近|接近|離)\s*(\S+?)\s*(?:附近|周邊|周圍|旁邊|一帶)?(?=\s|$)/, (_, w) => { target = w; })
-    || take(/(\S+?)\s*(?:附近|周邊|周圍|旁邊|一帶)(?=\s|$)/, (_, w) => { target = w; });
+  // 「靠近／鄰近／接近X」「近X」（近捷運、近公園這種是特色，不算）、「離X近一點」「在X附近」、「X附近的」「X旁」
+  //   中心點後面黏著別的條件（「靠近太平運動場透天4房」）→ 切開，剩下的放回去繼續解析
+  let target = null, back = '';   // back：切下來要放回去的字（take 正在改 s，不能在 callback 裡直接改）
+  const SUF = '附近|周邊|周圍|周遭|旁邊|一帶|旁';
+  const FEAT = '捷運|公園|學校|學區|市場|醫院|交流道|高鐵|綠地';
+  const head = w => { const i = w.search(CUT); if (i > 0) { back += ' ' + w.slice(i); return w.slice(0, i); } return w; };
+  const tail = w => {
+    // 「4房透天太平運動場」→ 最後一段是中心點，前面放回去
+    const parts = w.split(new RegExp(`(${CUT.source})`));
+    let i = parts.length - 1;
+    while (i > 0 && !parts[i]) i--;
+    if (i > 0) back += ' ' + parts.slice(0, i).join('');
+    return parts[i];
+  };
+  take(new RegExp(`(?:靠近|鄰近|接近|距離|離|(?<![靠鄰接附最將])近(?!${FEAT}))\\s*(\\S+?)\\s*(?:${SUF}|近一點|比較近|很近|不遠|近)?(?=的|\\s|$)`), (_, w) => { target = head(w); })
+    || take(new RegExp(`(?:在|位於)\\s*(\\S+?)\\s*(?:${SUF})`), (_, w) => { target = head(w); })
+    || take(new RegExp(`(?<=^|\\s)(\\S+?)\\s*(?:${SUF})`), (_, w) => { target = tail(w); });
+  s += back; back = '';
+  if (target && target.length < 2) { s += ' ' + target; target = null; }
+  // 有說距離、沒說附近（「太平運動場 開車5分鐘」）→ 區名開頭又比區名長的那個字就是中心點（不然區名會先被拆掉、只剩「運動場」）
+  if (!target && dist != null) {
+    const shorts = districts.flatMap(d => d.length >= 3 ? [d, d.replace(/區$/, '')] : [d]);
+    const w = s.split(/\s+/).find(w => shorts.some(n => w.startsWith(n) && w.length >= n.length + 2 && w.slice(n.length).search(CUT) !== 0));
+    if (w) { s = s.replace(w, ' '); target = head(w); s += back; }
+  }
   const setNear = w => {
     // 黏在前面的區名／類型拆掉（「太平透天東平國小」）；區公所、區運動中心這種保留區名
-    let t = w;
+    //   定位時用原本的全名（「太平運動場」比只查「運動場」準），名稱不同才另存 g
+    let t = w, pre = '';
     for (let again = true; again;) {
       again = false;
       for (const d of [...districts].sort((a, b) => b.length - a.length)) for (const n of [d, d.length >= 3 ? d.replace(/區$/, '') : null]) {
-        if (n && t.startsWith(n) && t.length > n.length + 1 && !/^區?(?:公所|運動中心|圖書館|戶政|衛生所|農會|區民)/.test(t.slice(n.length))) { ds.add(d); t = t.slice(n.length); again = true; }
+        if (n && t.startsWith(n) && t.length > n.length + 1 && !/^區?(?:公所|運動中心|圖書館|戶政|衛生所|農會|區民)/.test(t.slice(n.length))) { ds.add(d); pre += n; t = t.slice(n.length); again = true; }
       }
       const m = t.match(/^(電梯大樓|大樓|透天厝|透天|公寓|華廈|別墅|可開發)/);
       if (m && t.length > m[1].length + 1) { s += ' ' + m[1]; t = t.slice(m[1].length); again = true; }
     }
     const k = dist ?? 2;
-    add('near', `${t} ${kmL || '附近'}（直線約${Math.round(k * 10) / 10}公里）`, t, k);
+    const g = pre ? pre + t : t;
+    add('near', `${g} ${kmL || '附近'}（直線約${Math.round(k * 10) / 10}公里）`, t, k);
+    if (g !== t) conds.at(-1).g = g;
   };
   if (target) setNear(target);
 
@@ -183,14 +257,17 @@ export function parse(text, districts, main, where = {}) {
   }
 
   // ---- 屋齡 ----
-  take(new RegExp(`(?:屋齡)?\\s*${NUM}\\s*年?\\s*-\\s*${NUM}\\s*年`), (_, a, b) => add('age', `屋齡${a}–${b}年`, +a, +b))
+  take(new RegExp(`(?:屋齡)?\\s*${NUM}\\s*年\\s*(?:左右|上下)`), (_, n) => add('age', `屋齡${Math.max(0, n - 5)}–${+n + 5}年`, Math.max(0, n - 5), +n + 5))
+    || take(new RegExp(`(?:屋齡)?\\s*${NUM}\\s*年?\\s*-\\s*${NUM}\\s*年`), (_, a, b) => add('age', `屋齡${a}–${b}年`, +a, +b))
     || take(new RegExp(`屋齡\\s*${NUM}\\s*-\\s*${NUM}`), (_, a, b) => add('age', `屋齡${a}–${b}年`, +a, +b))
     || take(new RegExp(`(?:屋齡)?\\s*${NUM}\\s*年\\s*以下|屋齡\\s*${NUM}\\s*以下`), (_, b, b2) => add('age', `屋齡≤${b || b2}年`, null, +(b || b2)))
     || take(/新成屋|新古屋|新建案|新屋/, () => add('age', '屋齡≤5年', null, 5));
   take(new RegExp(`(?:屋齡)?\\s*${NUM}\\s*年\\s*以上|屋齡\\s*${NUM}\\s*以上`), (_, a, a2) => add('age', `屋齡≥${a || a2}年`, +(a || a2), null))
-    || take(/老屋|老公寓/, () => add('age', '屋齡≥30年', 30, null));
+    || take(/老屋|老房子?|老(?=透天|公寓|大樓|華廈)/, () => add('age', '屋齡≥30年', 30, null));
 
   // ---- 樓層 ----
+  take(/(?:不要|不含|排除|非)\s*頂樓(?:加蓋)?/, () => add('flpn', '不要頂樓', 'top'));
+  take(new RegExp(`(?:不要|不含|排除|非)\\s*(?:${NUM}\\s*樓|一樓)`), (_, n) => add('fln', `不要${n || 1}樓`, +(n || 1)));
   take(/高樓層|高樓/, () => add('flp', '高樓層', 'high'))
     || take(/低樓層|低樓/, () => add('flp', '低樓層', 'low'))
     || take(/中樓層/, () => add('flp', '中樓層', 'mid'))
@@ -209,7 +286,7 @@ export function parse(text, districts, main, where = {}) {
   // ---- 車位 ----
   //   型式：591 欄位 cartmodel（平面式／機械式…）；其他平台看標題有沒有寫
   take(/雙車位|2車位|兩個車位|2個車位/, () => add('kw', '雙車位', '雙車位|2車位|兩車位|2個車位|雙平車'));
-  take(/(?:不要|不含|排除|非)\s*(機械|平面)\s*式?\s*(?:車位)?/, (_, t) => add('pkn', `有車位但不要${t}`, t));
+  take(/(?:不要|不含|排除|非)\s*(機械|平面)\s*式?\s*(?:車位)?|(機械|平面)\s*式?\s*(?:車位)?\s*(?:以外|除外|不要)/, (_, t, t2) => add('pkn', `有車位但不要${t || t2}`, t || t2));
   take(/(?:不要|不用|沒有|無|不含)\s*車位/, () => add('pk', '不要車位', 0))
     || take(/(?:有|含|附|要|帶)?\s*(坡道平面|坡道機械|平面|機械|坡道|升降|塔式)\s*式?\s*(?:車位)?/, (_, t) => add('pkt', `${t}車位`, t))
     || take(/(?:有|含|附|要|帶)?\s*車位/, () => add('pk', '有車位', 1));
@@ -324,6 +401,8 @@ function test(c, x) {
       if (!tot || tot < 6 || lo !== hi) return false;   // 透天整棟、矮樓不分高低樓層
       return c.a === 'high' ? lo >= tot * 2 / 3 : c.a === 'low' ? lo <= 3 : lo > 3 && lo < tot * 2 / 3;
     }
+    case 'flpn': { if (!x.fl) return true; const [lo, hi, tot] = x.fl; return !(tot && lo === tot && hi === tot && tot > 1); }
+    case 'fln': { if (!x.fl) return true; const [lo, hi] = x.fl; return !(lo === c.a && hi === c.a); }
   }
   return true;
 }
@@ -368,11 +447,21 @@ async function verify(raw, sig, secret) {
   return r === 0;
 }
 
-async function reply(env, token, text) {
-  await fetch('https://api.line.me/v2/bot/message/reply', {
+// texts：一則或多則（一次最多 5 則）；quick：最後一則下面附範例按鈕
+async function reply(env, token, texts, quick = false) {
+  const list = [].concat(texts);
+  const messages = list.map((t, i) => ({
+    // 半個 emoji（索引切字切壞）會讓 LINE 整則拒收 → 先修成合法字串、超過 5000 字截掉
+    type: 'text', text: Array.from(t.toWellFormed()).slice(0, 4900).join(''),
+    ...(quick && i === list.length - 1 ? { quickReply: { items: QUICK } } : {})
+  }));
+  const text = list.join('\n');
+  const r = await fetch('https://api.line.me/v2/bot/message/reply', {
     method: 'POST', headers: { Authorization: `Bearer ${env.LINE_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ replyToken: token, messages: [{ type: 'text', text }] })
+    body: JSON.stringify({ replyToken: token, messages })
   });
+  // 失敗原因（token 錯、reply token 過期、字太長…）印在 wrangler tail（bash web/tail-line.sh）
+  if (!r.ok) console.log(`LINE reply 失敗 ${r.status} ${(await r.text()).slice(0, 300)}（${text.length} 字）`);
 }
 
 // 案件池陣列 → 物件（欄位順序 meta.pkeys，tools/line-index.js PKEYS）
@@ -398,10 +487,12 @@ export function matchLine(x) {
   return `${x.sm ? '🔒同體系 ' : ''}・${x.p ?? '—'}萬｜${x._d} ${x.n || ''}\n  ${bits.join(' ')}${x.own === 2 ? '・只有屋主在賣' : x.own ? '・有屋主在賣' : ''}\n  ${url}`;
 }
 
-async function answer(env, uid, text) {
-  const S = store(env);
+const answer = (env, uid, text) => answerFor(store(env), uid, text);
+// S＝get/put 介面（正式是 KV＋D1；tools/line-ask.mjs 本機模擬用）
+export async function answerFor(S, uid, text) {
   const t = text.trim();
-  if (/^(說明|help|\?|？|怎麼用|指令|用法)$/i.test(t)) return HELP;
+  if (/^(說明|help|\?|？|怎麼用|指令|用法|全部條件)$/i.test(t)) return HELP;
+  if (/^(你好|您好|嗨|hi|hello|哈囉|開始|教學|使用說明|範例|例子)[!！。]?$/i.test(t)) return WELCOME;
   const meta = await S.get('line-meta', 'json');
   if (!meta) return '還沒有資料，等下一次排程更新後再試';
   // 「更多」：重新解析上一次的查詢文字，從下一頁開始（資料更新過也照新的排）
@@ -421,8 +512,10 @@ async function answer(env, uid, text) {
   if (near) {
     const rd = await roadsOf();
     near.road = i => rd.pts[i];
-    near.pts = await locate(S, near.a, rd, q.nearAuto ? null : q.ds, meta.districts, meta.box);
-    if (!near.pts) return `找不到「${near.a}」在哪裡，換個說法試試（例如加上區名、寫全名：「太平東平國小」「北屯好事多」）`;
+    // 先用全名（「太平運動場」），找不到再用拆掉區名的（「運動場」，挑離那區最近的）
+    near.pts = (near.g && await locate(S, near.g, rd, q.nearAuto ? null : q.ds, meta.districts, meta.box))
+      || await locate(S, near.a, rd, q.nearAuto ? null : q.ds, meta.districts, meta.box);
+    if (!near.pts) return `找不到「${near.g || near.a}」在哪裡，換個說法試試（例如加上區名、寫全名：「太平東平國小」「北屯好事多」）`;
     if (q.nearAuto) {
       // 只讀範圍碰得到的區（各區案件位置外框，tools/line-index.js meta.box）
       const pad = near.b / 100 + 0.005;
@@ -521,12 +614,15 @@ export async function webhook(req, env) {
     const uid = e.source?.userId || '';
     if (!allow.has(uid)) {
       // 還沒開權限：回對方的 ID，讓管理者加進 LINE_ALLOW（tools/setup-line.sh）
-      if (e.type === 'message' || e.type === 'follow') await reply(env, e.replyToken, `你的 LINE ID：\n${uid}\n\n請管理者把這串加進查詢名單後就能用`);
+      const id = `🔑 你的 LINE ID：\n${uid}\n\n還沒開通查詢 → 把這串傳給管理者，加進名單後就能用`;
+      if (e.type === 'follow') await reply(env, e.replyToken, [WELCOME.replace(/\n下面的按鈕.*$/, ''), id]);
+      else if (e.type === 'message') await reply(env, e.replyToken, id);
       continue;
     }
-    if (e.type === 'follow') { await reply(env, e.replyToken, HELP); continue; }
+    if (e.type === 'follow') { await reply(env, e.replyToken, WELCOME, true); continue; }
     if (e.type !== 'message' || e.message?.type !== 'text') continue;
-    await reply(env, e.replyToken, await answer(env, uid, e.message.text));
+    const out = await answer(env, uid, e.message.text);
+    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP));
   }
   return new Response('ok');
 }

@@ -7,7 +7,7 @@
 //   本機看：node tools/line-index.js --dry
 const fs = require('fs');
 const path = require('path');
-const { cardLine } = require('./notify');
+const { cardLine, cut } = require('./notify');
 
 const ROOT = path.join(__dirname, '..');
 const { RADAR_URL, INGEST_KEY } = process.env;
@@ -67,13 +67,13 @@ function build(data, pool = null, roads = null) {
   const pby = {}, pdisp = {}, ptk = {};
   for (const x of pool?.items || []) {
     const rt = /華廈|別墅|套房|店面|公寓/.test(x.ty || '') ? x.ty : '';   // 一般大樓／透天不用存原始類型
-    const t = `${(x.t || '').slice(0, 24)} ${x.c || ''} ${(x.a || '').replace(/^台中市\S{1,3}區/, '')} ${(x.ft || []).join(' ')}`.replace(/臺/g, '台').trim();
+    const t = `${cut(x.t, 24)}${x.c || ''} ${(x.a || '').replace(/^台中市\S{1,3}區/, '')} ${(x.ft || []).join(' ')}`.replace(/臺/g, '台').trim();
     (pby[x.d] = pby[x.d] || []).push([x.id, typeOf(x.ty), rt, x.ag ?? null, x.p ?? null, x.ar ?? null, rooms(x.ly),
       x.up ?? null, x.ma ?? null, floors(x.fl), x.pk ?? null, x.pt ? x.pt.replace(/式$/, '') : '',
       x.sc, x.own || 0, (x.tg || []).length ? x.tg : 0, Math.round((Date.parse(x.f) || 0) / 1000), x.same ? 1 : 0,
       ll5(x.ll), x.ll ? null : rk(x.d, x.a)]);
     (ptk[x.d] = ptk[x.d] || []).push(t);
-    (pdisp[x.d] = pdisp[x.d] || {})[x.id] = [x.c || (x.t || '').slice(0, 14), x.fl || '', x.ly || '',
+    (pdisp[x.d] = pdisp[x.d] || {})[x.id] = [x.c || cut(x.t, 14),x.fl || '', x.ly || '',
       String(x.u || '').replace('https://sale.591.com.tw/home/house/detail/', '591:')];
   }
   const districts = [...new Set([...Object.keys(by), ...Object.keys(pby)])].sort();
