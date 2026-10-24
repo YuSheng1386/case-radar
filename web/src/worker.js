@@ -4,7 +4,7 @@
 //   GitHub Actions：/api/ingest/*（帶 X-Ingest-Key）上傳案件資料與爬蟲狀態
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
-import { webhook as lineWebhook } from './line.mjs';
+import { webhook as lineWebhook, pushWelcome, lineStatus } from './line.mjs';
 import { geocode } from './geo.mjs';
 import { store } from './store.mjs';
 
@@ -141,6 +141,16 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/overrides' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     return json((await env.DB.prepare('SELECT item_id FROM same_override').all()).results.map(x => x.item_id));
+  }
+  // 推播使用說明給查詢名單（LINE_ALLOW）：本機 bash tools/push-welcome.sh；每人算 1 則推播額度
+  if (p === '/api/ingest/push-welcome' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const b = await body(req).catch(() => ({}));
+    return json(await pushWelcome(env, b?.broadcast ? 'broadcast' : b?.all ? null : 1));
+  }
+  if (p === '/api/ingest/line-status' && m === 'GET') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    return json(await lineStatus(env));
   }
   // 推播用地圖（tools/notify.js 新案件）：存 map-<token> 14 天（D1 blobs），回傳 token；頁面 /m/<token>
   if (p === '/api/ingest/map' && m === 'POST') {

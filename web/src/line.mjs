@@ -603,6 +603,46 @@ async function locate(S, w, rd, ds, districts, box) {
   return out.length ? out : null;
 }
 
+// 主動推播使用說明（push 算每月額度：每人 1 則）；n＝推給名單前幾個人（預設只推第一個＝管理者），null＝全部
+//   n＝'broadcast'：群發給所有好友（不在查詢名單的也收得到），每個好友算 1 則
+export async function pushWelcome(env, n = 1) {
+  if (n === 'broadcast') {
+    const r = await fetch('https://api.line.me/v2/bot/message/broadcast', {
+      method: 'POST', headers: { Authorization: `Bearer ${env.LINE_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: [{ type: 'text', text: WELCOME, quickReply: { items: QUICK } }] })
+    });
+    return r.ok ? { ok: true, sent: 'broadcast' } : { ok: false, errors: [`${r.status} ${(await r.text()).slice(0, 200)}`] };
+  }
+  const ids = String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, n ?? undefined);
+  if (!ids.length) return { ok: false, error: '查詢名單 LINE_ALLOW 是空的' };
+  const out = [];
+  for (const to of ids) {
+    const r = await fetch('https://api.line.me/v2/bot/message/push', {
+      method: 'POST', headers: { Authorization: `Bearer ${env.LINE_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, messages: [{ type: 'text', text: WELCOME, quickReply: { items: QUICK } }] })
+    });
+    out.push(r.ok ? 'ok' : `${r.status} ${(await r.text()).slice(0, 200)}`);
+  }
+  return { ok: out.every(x => x === 'ok'), sent: out.filter(x => x === 'ok').length, errors: out.filter(x => x !== 'ok') };
+}
+
+// 帳號狀態：本月額度／已用、好友數（LINE 統計隔天才更新）、查詢名單上每個人的 LINE 名稱（bash tools/line-status.sh）
+//   好友完整名單 LINE 只開放給認證帳號，一般帳號只能查「已知 ID」的名稱
+export async function lineStatus(env) {
+  const H = { Authorization: `Bearer ${env.LINE_TOKEN}` };
+  const get = async u => { const r = await fetch(`https://api.line.me${u}`, { headers: H }); return r.ok ? r.json() : { error: r.status }; };
+  const tw = new Date(Date.now() + 8 * 3600e3 - 864e5);   // 昨天（台灣日期）
+  const ymd = `${tw.getUTCFullYear()}${String(tw.getUTCMonth() + 1).padStart(2, '0')}${String(tw.getUTCDate()).padStart(2, '0')}`;
+  const ids = String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
+  const [quota, used, fol, bot, ...profiles] = await Promise.all([get('/v2/bot/message/quota'), get('/v2/bot/message/quota/consumption'),
+    get(`/v2/bot/insight/followers?date=${ymd}`), get('/v2/bot/info'), ...ids.map(id => get(`/v2/bot/profile/${id}`))]);
+  return {
+    bot: bot.displayName, quota: quota.type === 'limited' ? quota.value : quota.type, used: used.totalUsage,
+    followers: fol.status === 'ready' ? { date: ymd, friends: fol.followers, targeted: fol.targetedReaches, blocks: fol.blocks } : fol,
+    allow: ids.map((id, i) => ({ id: id.slice(0, 5) + '…' + id.slice(-4), name: profiles[i].displayName || `（查不到：${profiles[i].error}，可能沒加好友）`, push: i === 0 }))
+  };
+}
+
 export async function webhook(req, env) {
   const raw = await req.arrayBuffer();
   if (!env.LINE_SECRET || !(await verify(raw, req.headers.get('x-line-signature'), env.LINE_SECRET)))
