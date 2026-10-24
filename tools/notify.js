@@ -21,12 +21,20 @@ const NOTIFY_SCORE = +(process.env.NOTIFY_SCORE || 60);
 const MATCH_MIN = +(process.env.MATCH_MIN || 30);
 const PER_CLIENT_MAX = 10;     // 每位客戶每次最多記幾件新配對（避免資料大變動時洗版）
 const LINE_RESERVE = 10;       // 本月額度留給手動／其他用途
-// 累積幾次排程才推一次（用戶 10/24：每次照常更新新案，LINE 兩次合併推一則；推 2 人額度會加倍）
-const NOTIFY_EVERY = Math.max(1, +(process.env.NOTIFY_EVERY || 2));
+// 推播時段（用戶 10/24；網站每次排程照常更新，只是 LINE 什麼時候推）：
+//   9 點前只累積 → 當天第一次 9 點後的排程推一則（整晚累積的）→ 白天累積滿 PUSH_MIN 件（或有特急件）才推
+//   → 當天第一次 20 點後的排程收尾（剩的全推，不管幾件）→ 之後到隔天 9 點只累積
+//   GitHub 排程常晚 10–30 分鐘，所以看「當天第一次過了幾點」不看準點
+const PUSH_START = 9, PUSH_END = 20;
+const PUSH_MIN = +(process.env.PUSH_MIN || 5);
+// 特急件不等滿 5 件：分數 ≥90。只有屋主在賣預設不算（平常新案九成是屋主自售，算進來等於每次都推），NOTIFY_URGENT_OWNER=1 打開
+const URGENT_SCORE = +(process.env.URGENT_SCORE || 90);
+const URGENT_OWNER = process.env.NOTIFY_URGENT_OWNER === '1';
 const SITE = (RADAR_URL || 'https://case-radar.yusheng1386.workers.dev').replace(/\/$/, '');
 
 const load = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
-const twNow = () => new Date(Date.now() + 8 * 3600e3);
+// NOTIFY_NOW＝測試用的台灣時間（例 2026-10-25T13:00），沒給就用現在
+const twNow = () => new Date((process.env.NOTIFY_NOW ? Date.parse(process.env.NOTIFY_NOW + 'Z') - 8 * 3600e3 : Date.now()) + 8 * 3600e3);
 const twDate = () => twNow().toISOString().slice(0, 10);
 const H = { 'X-Ingest-Key': INGEST_KEY || '' };
 
@@ -74,8 +82,9 @@ async function linePush(text) {
 async function main() {
   const st = load(F, { cards: {}, clients: {}, pushes: {}, pending: { cards: [], clients: {} } });
   st.pending = st.pending || { cards: [], clients: {} };
-  const data = load(path.join(ROOT, 'docs', 'data.json'), null);
-  const pool = load(path.join(ROOT, 'docs', 'pool.json'), null);
+  const DOCS = process.env.RADAR_DOCS || path.join(ROOT, 'docs');   // 測試用另一份資料
+  const data = load(path.join(DOCS, 'data.json'), null);
+  const pool = load(path.join(DOCS, 'pool.json'), null);
   if (!data || !pool) { console.log('[通知] 沒有 data.json／pool.json，略過'); return; }
   const now = new Date().toISOString();
   const firstRun = !st.init;
@@ -172,10 +181,18 @@ async function main() {
 
   if (DRY) { console.log('----- LINE 訊息預覽 -----\n' + msg); st.pending = { cards: [], clients: {} }; return save(st); }
   if (!LINE_TOKEN || !TO.length) { console.log('[通知] 沒設 LINE_TOKEN／LINE_TO，只寫網站不推'); st.pending = { cards: [], clients: {} }; return save(st); }
-  // 有新的但還沒累積到 NOTIFY_EVERY 次 → 先存著（網站已照常更新），下一次排程合併推
-  if ((st.wait || 0) + 1 < NOTIFY_EVERY) {
-    st.wait = (st.wait || 0) + 1;
-    console.log(`[通知] 有新的，累積第 ${st.wait}／${NOTIFY_EVERY} 次，下次排程合併推`);
+  // 現在該不該推（不推就存著，下次排程合併；網站已照常更新）
+  const today = twDate(), h = t.getUTCHours();
+  const count = pc.length + pcl.reduce((a, x) => a + x.items.length, 0);
+  const urgent = pc.some(c => c.score >= URGENT_SCORE || (URGENT_OWNER && ownerOnly(c)));
+  // 收尾只在 20–21 點（20:00 那班晚到也算）；22 點以後就算還沒收尾也不推，留到隔天早上，不半夜吵人
+  const quiet = h < PUSH_START || st.endDay === today || h >= PUSH_END + 2;
+  const why = quiet ? null
+    : h >= PUSH_END ? 'end'
+    : st.startDay !== today ? 'start'
+    : count >= PUSH_MIN ? 'min' : urgent ? 'urgent' : null;
+  if (!why) {
+    console.log(`[通知] 累積 ${count} 件先不推（${quiet ? `${PUSH_END} 點後到隔天 ${PUSH_START} 點只累積` : `白天滿 ${PUSH_MIN} 件或有 ${URGENT_SCORE} 分以上才推`}）`);
     return save(st);
   }
 
@@ -193,8 +210,9 @@ async function main() {
     await linePush(msg);
     st.pushes = { [day]: used + n };   // 只留今天
     st.pending = { cards: [], clients: {} };
-    st.wait = 0;
-    console.log(`[通知] 已推 LINE ${n} 人（今天用 ${used + n}／${perDay} 則，本月剩 ${q.left - n}）`);
+    st.startDay = today;               // 推過了，今天白天之後照件數規則
+    if (why === 'end') st.endDay = today;
+    console.log(`[通知] 已推 LINE ${n} 人、${count} 件（${{ start: '早上第一則', end: '晚上收尾', min: `滿 ${PUSH_MIN} 件`, urgent: '特急件' }[why]}；今天用 ${used + n}／${perDay} 則，本月剩 ${q.left - n}）`);
   } catch (e) {
     console.error('[通知]', e.message, '— 下次再推');
   }

@@ -25,12 +25,29 @@ echo "$OUT" | grep -q '新的可開發】2 件' && ok "LINE 摘要含新可開�
 # 非乾跑、沒有 LINE 金鑰：寫網站
 node -e 'const f=process.argv[1];const s=require(f);Object.keys(s.clients[7].ids).slice(0,2).forEach(k=>delete s.clients[7].ids[k]);require("fs").writeFileSync(f,JSON.stringify(s))' $S/notify.json
 node tools/notify.js | grep -q '只寫網站不推' && [ "$(cat $S/posted)" = 2 ] && ok "沒設 LINE 時新配對寫到網站" || bad "寫網站"
-# 推給 2 人＋累積 2 次才推（假 LINE：tools/fake-line.js）
-export FAKE_LINE_LOG=$S/line.log LINE_TOKEN=t LINE_TO=Ua,Ub NOTIFY_EVERY=2
-newcards() { node -e 'const f=process.argv[1];const s=require(f);Object.keys(s.cards).slice(0,2).forEach(k=>delete s.cards[k]);require("fs").writeFileSync(f,JSON.stringify(s))' $S/notify.json; }
-newcards; node -r ./tools/fake-line.js tools/notify.js | grep -q '累積第 1／2 次' && [ ! -s $S/line.log ] && ok "第 1 次有新案：先存著不推" || bad "累積第 1 次"
-OUT=$(node -r ./tools/fake-line.js tools/notify.js)
-[ "$(cat $S/line.log 2>/dev/null)" = "multicast 2" ] && echo "$OUT" | grep -q '已推 LINE 2 人' && ok "第 2 次：multicast 推 2 人、額度算 2 則" || bad "第 2 次：$OUT｜$(cat $S/line.log 2>/dev/null)"
-node -r ./tools/fake-line.js tools/notify.js >/dev/null; [ "$(wc -l < $S/line.log)" = 1 ] && ok "推完沒新的不再推" || bad "重複推"
+# 推播時段＋推給 2 人（假 LINE：tools/fake-line.js；NOTIFY_NOW 假裝現在幾點）
+#   newcards N [分數]：開發清單拿掉 N 件（下次變新案）；給分數就把那幾件改成該分數（測特急件）
+export FAKE_LINE_LOG=$S/line.log LINE_TOKEN=t LINE_TO=Ua,Ub
+mkdir -p $S/docs; cp docs/data.json docs/pool.json $S/docs/ 2>/dev/null; export RADAR_DOCS=$S/docs
+newcards() { node -e '
+const [f,df,n,sc]=process.argv.slice(1);const s=require(f);const d=require(df);
+const used=new Set([...s.pending.cards,...(s.testUsed||[])]);   // 挑沒用過的，免得跟已累積的重複（同一件不會算兩次）
+const q=d.cards.filter(c=>s.cards[c.id]&&!used.has(c.id)&&c.score<85&&c.score>=60).slice(0,+n);   // 只挑 85 分以下，免得意外變特急
+s.testUsed=[...(s.testUsed||[]),...q.map(c=>c.id)];
+q.forEach(c=>{delete s.cards[c.id];if(sc)c.score=+sc;});
+require("fs").writeFileSync(f,JSON.stringify(s));if(sc)require("fs").writeFileSync(df,JSON.stringify(d));' $S/notify.json $S/docs/data.json "$1" "${2:-}"; }
+pushes() { [ -s $S/line.log ] && wc -l < $S/line.log || echo 0; }
+run() { NOTIFY_NOW=$1 node -r ./tools/fake-line.js tools/notify.js 2>&1; }
+newcards 2; run 2026-10-25T07:10 | grep -q '只累積' && [ "$(pushes)" = 0 ] && ok "07:10 早上 9 點前：只累積" || bad "9 點前不該推"
+OUT=$(run 2026-10-25T09:20); [ "$(pushes)" = 1 ] && echo "$OUT" | grep -q '早上第一則' && grep -q 'multicast 2' $S/line.log && ok "09:20 早上第一則（multicast 2 人）" || bad "早上第一則：$OUT"
+newcards 3; run 2026-10-25T11:10 | grep -q '先不推' && [ "$(pushes)" = 1 ] && ok "11:10 白天 3 件：不推" || bad "白天未滿 5 件不該推"
+newcards 2; OUT=$(run 2026-10-25T13:10); [ "$(pushes)" = 2 ] && echo "$OUT" | grep -q '滿 5 件' && ok "13:10 累積到 5 件：推" || bad "滿 5 件：$OUT"
+newcards 1 95; OUT=$(run 2026-10-25T15:10); [ "$(pushes)" = 3 ] && echo "$OUT" | grep -q '特急件' && ok "15:10 1 件 95 分：特急件馬上推" || bad "特急件：$OUT"
+newcards 1; run 2026-10-25T17:10 >/dev/null; [ "$(pushes)" = 3 ] && ok "17:10 1 件：不推" || bad "17:10 不該推"
+OUT=$(run 2026-10-25T20:15); [ "$(pushes)" = 4 ] && echo "$OUT" | grep -q '晚上收尾' && ok "20:15 晚上收尾：剩的全推" || bad "收尾：$OUT"
+newcards 1 95; run 2026-10-25T21:10 | grep -q '只累積' && [ "$(pushes)" = 4 ] && ok "21:10 收尾後就算特急也只累積" || bad "收尾後不該推"
+newcards 1; run 2026-10-25T23:10 | grep -q '只累積' && [ "$(pushes)" = 4 ] && ok "23:10 只累積" || bad "23 點不該推"
+OUT=$(run 2026-10-26T09:05); [ "$(pushes)" = 5 ] && echo "$OUT" | grep -q '早上第一則' && ok "隔天 09:05 推昨晚累積的" || bad "隔天早上：$OUT"
+run 2026-10-26T11:10 >/dev/null; [ "$(pushes)" = 5 ] && ok "沒新的不推" || bad "重複推"
 kill $SRV
 [ $FAIL = 0 ] && echo "全部通過"
