@@ -63,6 +63,8 @@ async function main() {
   //   其他時候 → 增量：從最前面翻，連續 3 頁都是看過且沒變價就停（通常幾頁就停）
   const known591 = new Map();
   for (const [key, rec] of Object.entries(tracker.items)) {
+    // 2026-10-24 前存的 591 網址少了 /2/（現在會顯示「物件不存在」），載入時補上
+    if (rec.d?.url) rec.d.url = rec.d.url.replace(/(sale\.591\.com\.tw\/home\/house\/detail\/)(?=\d+\.html)/, '$12/');
     if (key.startsWith('591_') && !rec.removedAt && rec.d) known591.set(rec.d.sourceId, rec.d.price);
   }
   const twDay = new Date(Date.now() + 8 * 3600e3).getUTCDay();

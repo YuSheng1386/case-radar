@@ -482,7 +482,7 @@ export function poolItem(a, keys, d) {
 
 // 配對模式每件一行（案件池沒有預先排好的文字）：總價先，客人最在意
 export function matchLine(x) {
-  const url = String(x.u || '').replace(/^591:/, 'https://sale.591.com.tw/home/house/detail/');
+  const url = String(x.u || '').replace(/^591:/, 'https://sale.591.com.tw/home/house/detail/2/');
   const bits = [x.ar != null ? `${x.ar}坪` : '', x.fs, x.ly, x.ag != null ? `屋齡${x.ag}年` : '', x.pt ? `🚗${x.pt.replace(/式$/, '')}車位` : x.pk ? '🚗含車位' : ''].filter(Boolean);
   return `${x.sm ? '🔒同體系 ' : ''}・${x.p ?? '—'}萬｜${x._d} ${x.n || ''}\n  ${bits.join(' ')}${x.own === 2 ? '・只有屋主在賣' : x.own ? '・有屋主在賣' : ''}\n  ${url}`;
 }

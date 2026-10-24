@@ -74,7 +74,7 @@ function build(data, pool = null, roads = null) {
       ll5(x.ll), x.ll ? null : rk(x.d, x.a)]);
     (ptk[x.d] = ptk[x.d] || []).push(t);
     (pdisp[x.d] = pdisp[x.d] || {})[x.id] = [x.c || cut(x.t, 14),x.fl || '', x.ly || '',
-      String(x.u || '').replace('https://sale.591.com.tw/home/house/detail/', '591:')];
+      String(x.u || '').replace(/^https:\/\/sale\.591\.com\.tw\/home\/house\/detail\/(?:2\/)?/, '591:')];
   }
   const districts = [...new Set([...Object.keys(by), ...Object.keys(pby)])].sort();
   // 路名／社區名 → 在哪幾區（沒打區域、只打「東平路」時只讀那幾區，不用讀全台中）
