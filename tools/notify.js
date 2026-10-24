@@ -17,6 +17,9 @@ const STATE = process.env.RADAR_STATE || path.join(ROOT, 'state');
 const F = path.join(STATE, 'notify.json');
 const { RADAR_URL, INGEST_KEY, LINE_TOKEN, LINE_TO } = process.env;
 const DRY = process.env.NOTIFY_DRY === '1';
+// 測試推播（Actions 手動執行勾 notify_test）：不看時段、現在就推，只推給 LINE_TO 第一位；累積的不清，下次照常推給大家
+//   沒有累積的新案就拿最近上架的 3 件來推
+const TEST = process.env.NOTIFY_TEST === '1';
 const NOTIFY_SCORE = +(process.env.NOTIFY_SCORE || 60);
 const MATCH_MIN = +(process.env.MATCH_MIN || 30);
 const PER_CLIENT_MAX = 10;     // 每位客戶每次最多記幾件新配對（避免資料大變動時洗版）
@@ -80,11 +83,11 @@ async function lineQuota() {
 
 // LINE_TO 可以逗號分隔多人（10/24 加玟靜）→ 一人用 push、多人用 multicast；額度照人數算（每人 1 則）
 const TO = String(LINE_TO || '').split(',').map(s => s.trim()).filter(Boolean);
-async function linePush(text) {
-  const multi = TO.length > 1;
+async function linePush(text, to = TO) {
+  const multi = to.length > 1;
   const r = await fetch(`https://api.line.me/v2/bot/message/${multi ? 'multicast' : 'push'}`, {
     method: 'POST', headers: { Authorization: `Bearer ${LINE_TOKEN}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to: multi ? TO : TO[0], messages: [{ type: 'text', text: cut(text, 4900) }] })
+    body: JSON.stringify({ to: multi ? to : to[0], messages: [{ type: 'text', text: cut(text, 4900) }] })
   });
   if (!r.ok) throw new Error(`LINE 推播失敗 HTTP ${r.status} ${(await r.text()).slice(0, 200)}`);
 }
@@ -151,6 +154,7 @@ async function main() {
   // ---- 3. 合併成一則 LINE ----
   const cardById = Object.fromEntries(data.cards.map(c => [c.id, c]));
   const pc = st.pending.cards.map(id => cardById[id]).filter(c => c && qualIds.has(c.id)); // 已下架或不再符合的就不推
+  if (TEST && !pc.length) pc.push(...qual.slice().sort((a, b) => (Date.parse(b.firstSeen) || 0) - (Date.parse(a.firstSeen) || 0)).slice(0, 3));
   // 傳出前測連結：同一案多個平台時傳打得開的那個
   if (pc.length) {
     const dead = await pickLinks(pc);
@@ -196,6 +200,13 @@ async function main() {
 
   if (DRY) { console.log('----- LINE 訊息預覽 -----\n' + msg); st.pending = { cards: [], clients: {} }; return save(st); }
   if (!LINE_TOKEN || !TO.length) { console.log('[通知] 沒設 LINE_TOKEN／LINE_TO，只寫網站不推'); st.pending = { cards: [], clients: {} }; return save(st); }
+  if (TEST) {
+    try {
+      await linePush('【測試推播・只推給你】\n' + msg, TO.slice(0, 1));
+      console.log(`[通知] 測試推播：已推 1 人、${pc.length} 件（累積的照常留到下次推）`);
+    } catch (e) { console.error('[通知]', e.message); }
+    return save(st);
+  }
   // 現在該不該推（不推就存著，下次排程合併；網站已照常更新）
   const today = twDate(), h = t.getUTCHours();
   const count = pc.length + pcl.reduce((a, x) => a + x.items.length, 0);

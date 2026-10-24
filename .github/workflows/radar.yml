@@ -11,6 +11,10 @@ on:
       mode:
         description: 'quick 或 full'
         default: 'quick'
+      notify_test:
+        description: '測試推播：不看時段、現在推一則給管理者（不影響累積）'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -54,6 +58,7 @@ jobs:
         env:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           LINE_TO: ${{ secrets.LINE_TO }}
+          NOTIFY_TEST: ${{ inputs.notify_test && '1' || '' }}
         run: node tools/notify.js
 
       # LINE 對話查詢用的每區精簡索引（官方帳號打「東區優質透天」就從這裡篩）
