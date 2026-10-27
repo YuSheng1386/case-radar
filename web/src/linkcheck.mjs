@@ -33,8 +33,11 @@ export async function linkAlive(url, ms = 5000) {
   } catch { return true; }
 }
 
-// 各平台連結都打不開時取代網址的那一行（網站 #case/<id> 有雷達最後抓到的資料）
-export const deadNote = (site, id) => `⚠️平台刊登可能已下架，案件資料：${site}/#case/${id}`;
+// 各平台連結都打不開時取代網址的那一行：案件快照頁 /c/<token>（公開、不用登入，連結本身就是鑰匙，30 天失效）
+//   快照：{ t: 案件文字（不含網址）, us: 各平台網址, q: 591 搜尋關鍵字, at }，Worker 存 case-<token>（web/public/case.html 顯示）
+export const deadNote = (site, tok) => `⚠️平台刊登可能已下架，案件資料：${site}/c/${tok}`;
+export const CASE_TTL = 30 * 86400;
+export const caseToken = () => [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
 
 // urls 依偏好排好；回第一個還在的，全部失效回 null
 export async function pickAlive(urls) {

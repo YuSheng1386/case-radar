@@ -7,6 +7,7 @@
 import { webhook as lineWebhook, pushWelcome, lineStatus } from './line.mjs';
 import { geocode } from './geo.mjs';
 import { store } from './store.mjs';
+import { CASE_TTL } from './linkcheck.mjs';
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITER = 20000;
@@ -86,6 +87,12 @@ export default {
         const v = await store(env).get(`map-${r0[1]}`);
         return v ? new Response(v, { headers: { 'Content-Type': 'application/json; charset=utf-8' } }) : err('地圖連結已失效', 404);
       }
+      // 案件快照（公開、連結本身就是鑰匙，30 天失效）：LINE 裡各平台刊登都打不開時附這個；頁面 /c/<token>，資料 /api/case/<token>
+      if (m === 'GET' && /^\/c\/[a-f0-9]{24}$/.test(p)) return env.ASSETS.fetch(new Request(new URL('/case', url), req));
+      if (m === 'GET' && (r0 = p.match(/^\/api\/case\/([a-f0-9]{24})$/))) {
+        const v = await store(env).get(`case-${r0[1]}`);
+        return v ? new Response(v, { headers: { 'Content-Type': 'application/json; charset=utf-8' } }) : err('連結已失效', 404);
+      }
       // LINE 官方帳號對話查詢（LINE 平台打過來，用 LINE_SECRET 驗簽）
       if (p === '/api/line/webhook' && m === 'POST') return await lineWebhook(req, env);
       if (p.startsWith('/api/')) return await api(req, env, url, p, m);
@@ -151,6 +158,15 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/line-status' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     return json(await lineStatus(env));
+  }
+  // 推播用案件快照（tools/notify.js：各平台刊登都打不開的新案）：存 case-<token>，回傳 token；頁面 /c/<token>
+  if (p === '/api/ingest/case' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const b = await body(req);
+    const tok = randHex(12);
+    await store(env).put(`case-${tok}`, JSON.stringify({ t: String(b.t || '').slice(0, 1000), us: (b.us || []).slice(0, 30).map(String),
+      q: String(b.q || '').slice(0, 40), at: b.at || null }), { expirationTtl: CASE_TTL });
+    return json({ token: tok });
   }
   // 推播用地圖（tools/notify.js 新案件）：存 map-<token> 14 天（D1 blobs），回傳 token；頁面 /m/<token>
   if (p === '/api/ingest/map' && m === 'POST') {

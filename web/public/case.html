@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>案件資料</title>
+<link rel="stylesheet" href="/app.css">
+<style>
+/* 案件快照：/c/<token>（資料 /api/case/<token>，30 天失效）。LINE 裡各平台刊登都打不開時附這頁，不用登入 */
+.wrap{max-width:640px;margin:0 auto;padding:16px}
+h1{font-size:17px;margin:0 0 8px}
+.warn{background:#fff6e0;color:#7a5b00;border-radius:8px;padding:10px 12px;font-size:13.5px;line-height:1.6;margin-bottom:14px}
+.txt{white-space:pre-line;font-size:15px;line-height:1.7;border:1px solid var(--line);border-radius:8px;padding:12px}
+.links{margin-top:14px;font-size:14px;line-height:1.9}
+.links a{word-break:break-all}
+.sub{font-size:12.5px;color:var(--mut);margin-top:14px}
+.err{padding:40px 16px;text-align:center;color:var(--mut)}
+</style>
+</head>
+<body>
+<div class="wrap" id="main"><div class="err">載入中…</div></div>
+<script>
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const tok = location.pathname.split('/').pop();
+fetch(`/api/case/${tok}`).then(async r => {
+  const d = await r.json();
+  if (!r.ok) throw new Error(d.error || '讀取失敗');
+  const lines = String(d.t || '').split('\n');
+  const head = lines[0].replace(/^[・\s]+/, '');
+  const name = d.q || (head.match(/[區鄉鎮市]\s+(\S+)/) || [])[1] || '';
+  const host = u => { try { return new URL(u).hostname.replace(/^www\./, ''); } catch { return '刊登'; } };
+  const SRC = { 'sale.591.com.tw': '591', 'buy.yungching.com.tw': '永慶', 'sinyi.com.tw': '信義', 'hbhousing.com.tw': '住商', 'etwarm.com.tw': '東森', 'buy.houseprice.tw': '5168' };
+  const at = d.at ? new Date(d.at).toLocaleString('zh-TW', { hour12: false }) : '';
+  document.getElementById('main').innerHTML = `
+    <h1>${esc(head)}</h1>
+    <div class="warn">⚠️ 這件在各平台的刊登連結目前都打不開，可能已下架或廣告到期（屋主不一定已經不賣）。以下是雷達最後抓到的資料。</div>
+    <div class="txt">${esc(lines.join('\n'))}</div>
+    <div class="links">
+      ${(d.us || []).map(u => `・${esc(SRC[host(u)] || host(u))}（已打不開）：<a href="${esc(u)}" target="_blank" rel="noopener">${esc(u)}</a>`).join('<br>')}
+      ${name ? `<br>・<a href="https://sale.591.com.tw/?regionid=8&keywords=${encodeURIComponent(name)}" target="_blank" rel="noopener">到 591 搜尋「${esc(name)}」看還有沒有在賣</a>` : ''}
+    </div>
+    <div class="sub">案件雷達${at ? `・資料 ${esc(at)}` : ''}</div>`;
+}).catch(e => { document.getElementById('main').innerHTML = `<div class="err">${esc(e.message)}</div>`; });
+</script>
+</body>
+</html>

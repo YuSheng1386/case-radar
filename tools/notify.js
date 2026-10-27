@@ -50,12 +50,29 @@ const cut = (s, n) => Array.from(String(s || '')).slice(0, n).join('');
 // 每件一行：分數＋物件，下一行列出「為什麼值得看」的全部理由（用戶 10/21：不要只貼一個標籤像在分類）
 // 各平台網址，開價最低的先（推播時 pickLinks 會跳過失效的）
 const srcUrls = c => (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9)).map(s => s.url).filter(Boolean);
-// 傳出前測連結：c._url 設成第一個還在的；全部失效照樣推（優質案件不能漏），改附網站案件頁；回傳失效件數
+// 傳出前測連結：c._url 設成第一個還在的；全部失效照樣推（優質案件不能漏），改附案件快照頁（不用登入）；回傳失效件數
 async function pickLinks(cards) {
   const { pickAlive, deadNote } = await import('../web/src/linkcheck.mjs');
   const got = await Promise.all(cards.map(c => pickAlive(srcUrls(c))));
-  cards.forEach((c, i) => { c._url = got[i] ?? deadNote(SITE, c.id); });
-  return got.filter(u => u === null).length;
+  let dead = 0;
+  for (const [i, c] of cards.entries()) {
+    if (got[i] !== null) { c._url = got[i]; continue; }
+    dead++;
+    c._url = await caseLink(c, deadNote);
+  }
+  return dead;
+}
+// 案件快照存到網站（/c/<token>）；寫不進去（本機乾跑、網站掛了）就只註明，至少案件資料照推
+async function caseLink(c, deadNote) {
+  const t = cardLine({ ...c, _url: '' }).split('\n').filter(l => l.trim()).join('\n');
+  try {
+    if (!DRY && RADAR_URL && INGEST_KEY) {
+      const r = await fetch(`${SITE}/api/ingest/case`, { method: 'POST', headers: { 'X-Ingest-Key': INGEST_KEY, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ t, us: srcUrls(c), q: c.community || '', at: new Date().toISOString() }) });
+      if (r.ok) return deadNote(SITE, (await r.json()).token);
+    }
+  } catch {}
+  return `⚠️平台刊登可能已下架（${c.address || c.district || ''}）`;
 }
 
 const cardLine = c => {

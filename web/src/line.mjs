@@ -8,7 +8,7 @@
 // 秘密值：LINE_SECRET（驗簽）、LINE_TOKEN（回覆）、LINE_ALLOW（可以查的 LINE userId，逗號分隔）
 import { findPlace, km } from './geo.mjs';
 import { store } from './store.mjs';
-import { pickAlive, deadNote } from './linkcheck.mjs';
+import { pickAlive, deadNote, caseToken, CASE_TTL } from './linkcheck.mjs';
 
 const PAGE = 8;
 const MAP_MAX = 150;   // 地圖最多標幾件
@@ -559,7 +559,15 @@ export async function answerFor(S, uid, text) {
   await Promise.all(sl.map(async x => {
     const cur = q.mode === 'match' ? url591(x.u) : (String(x.x).match(/https?:\/\/\S+/) || [])[0];
     if (!cur) return;
-    const got = (await pickAlive([cur, ...(x.ua || []).map(url591)])) ?? deadNote(SITE, x.id);
+    const us = [cur, ...(x.ua || []).map(url591)];
+    let got = await pickAlive(us);
+    if (got === null) {
+      // 全部打不開：存一份案件快照，給不用登入的 /c/<token>
+      const t = (q.mode === 'match' ? matchLine({ ...x, u: '' }) : x.x).split('\n').filter(l => !/https?:\/\//.test(l)).join('\n').trim();
+      const tok = caseToken();
+      await S.put(`case-${tok}`, JSON.stringify({ t, us, q: x.n || '', at: meta.at }), { expirationTtl: CASE_TTL });
+      got = deadNote(SITE, tok);
+    }
     if (q.mode === 'match') x.u = got; else x.x = x.x.replace(cur, got);
   }));
   for (const x of show) {
