@@ -45,7 +45,11 @@ export async function pickAlive(urls) {
   const fix = x => x.replace(/(sale\.591\.com\.tw\/home\/house\/detail\/)(?=\d+\.html)/, '$12/');
   const u = [...new Set((urls || []).filter(Boolean).map(fix))];
   if (!u.length) return '';
-  const ok = await Promise.all(u.map(x => linkAlive(x)));
+  // 先只測第一個（大多還在）；打不開才同時測其餘的
+  //   Worker 免費方案一次最多 50 個對外請求：LINE 一頁 8 件 × 每件好幾個平台全測會逼近上限
+  if (await linkAlive(u[0])) return u[0];
+  const rest = u.slice(1);
+  const ok = await Promise.all(rest.map(x => linkAlive(x)));
   const i = ok.indexOf(true);
-  return i < 0 ? null : u[i];
+  return i < 0 ? null : rest[i];
 }

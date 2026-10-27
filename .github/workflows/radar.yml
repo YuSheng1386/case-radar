@@ -26,7 +26,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 150   # 週日 591 完整翻＋信義完整抓（10/27 起）約 95 分鐘
     env:
       RADAR_URL: ${{ secrets.RADAR_URL }}
       INGEST_KEY: ${{ secrets.INGEST_KEY }}

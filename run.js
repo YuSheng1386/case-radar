@@ -68,7 +68,11 @@ async function main() {
     if (key.startsWith('591_') && !rec.removedAt && rec.d) known591.set(rec.d.sourceId, rec.d.price);
   }
   const twDay = new Date(Date.now() + 8 * 3600e3).getUTCDay();
-  const sweep591 = known591.size === 0 || (full && twDay === 0) || process.env.RADAR_591_SWEEP === '1';
+  // 10/27 前 591 中文會被切在兩個封包中間變亂碼（U+FFFD）；追蹤資料還有亂碼 → 完整更新時順便完整翻一次蓋掉（修好後只會觸發一次）
+  const garbled591 = [...known591.keys()].length && Object.entries(tracker.items)
+    .filter(([k, r]) => k.startsWith('591') && !r.removedAt && r.d && /�/.test(`${r.d.title}${r.d.address}${r.d.community}${r.d.district}`)).length;
+  if (garbled591) console.log(`[591] 追蹤資料有 ${garbled591} 筆亂碼${full ? '，這次完整翻一次蓋掉' : '（完整更新時會重抓）'}`);
+  const sweep591 = known591.size === 0 || (full && twDay === 0) || (full && garbled591 > 0) || process.env.RADAR_591_SWEEP === '1';
   runLog.sweep591 = sweep591;
   const jobs = [['591', () => s591.scrape({ ...filters, maxPages: sweep591 ? 1000 : 60, known: sweep591 ? null : known591 })]];
   // 五區以外：只抓急售／賠售／自售等關鍵字＋屋主自售（量小，每次都完整抓，可直接判斷下架或拿掉關鍵字）
@@ -96,6 +100,43 @@ async function main() {
     }
     console.log(`[${name}]`, JSON.stringify(runLog.sources[name]));
   }
+
+  // 591 列表每頁約插 1 筆「影子」：內容跟真的刊登一模一樣（標題、刊登者、刊登時間到秒都相同），
+  //   但編號多約 420 萬（真的 20/21xxxxxx、影子 24/25xxxxxx），網址打不開，而且每次排程都換新編號
+  //   → 被當新案推、連結又是失效的（10/27 查到追蹤資料累積 2 萬筆影子）
+  //   同刊登時間（到秒）＋同刊登者＋同坪數＝同一筆，只留編號小的；追蹤資料裡已經存的影子一起清掉
+  //   （不用標題：舊資料標題可能有亂碼；含已下架的紀錄：真的那筆下架了，影子也該清。10/27 實測 2 萬筆影子 0 誤判）
+  const twinKey = d => d && d.postTime && `${d.postTime}|${d.agent || ''}|${d.area}`;
+  const realId = new Map();
+  const seeTwin = d => { const k = twinKey(d); if (k && (!realId.has(k) || +d.sourceId < realId.get(k))) realId.set(k, +d.sourceId); };
+  for (const [k, r] of Object.entries(tracker.items)) if (k.startsWith('591')) seeTwin(r.d);
+  for (const src of ['591', '591全市']) for (const it of fresh[src] || []) seeTwin(it);
+  const isShadow = d => { const k = twinKey(d); return !!k && realId.get(k) < +d.sourceId; };
+  let shadows = 0;
+  for (const src of ['591', '591全市']) {
+    if (!fresh[src]) continue;
+    const complete = fresh[src].complete;
+    const n = fresh[src].length;
+    fresh[src] = fresh[src].filter(it => !isShadow(it));
+    fresh[src].complete = complete;
+    shadows += n - fresh[src].length;
+    runLog.sources[src].count = fresh[src].length;
+  }
+  let purged = 0;
+  const shadowTo = {};   // 影子案件 id → 真的案件 id
+  for (const [k, r] of Object.entries(tracker.items)) if (k.startsWith('591') && isShadow(r.d)) {
+    shadowTo[`a-${r.d.sourceId}`] = `a-${realId.get(twinKey(r.d))}`;
+    delete tracker.items[k]; purged++;
+  }
+  // 推播紀錄：用影子 id 推過的案件，轉記到真的 id（不然清掉影子後會被當新案再推一次；10/27 查到 91 件）
+  const fNotify = path.join(STATE, 'notify.json');
+  const nst = purged ? load(fNotify, null) : null;
+  if (nst?.cards) {
+    let moved = 0;
+    for (const [sid, rid] of Object.entries(shadowTo)) if (nst.cards[sid]) { nst.cards[rid] = nst.cards[rid] || nst.cards[sid]; delete nst.cards[sid]; moved++; }
+    if (moved) { save(fNotify, nst); console.log(`[591] 推播紀錄：${moved} 件影子 id 轉記到真的 id`); }
+  }
+  if (shadows || purged) console.log(`[591] 影子刊登：這次 ${shadows} 筆略過，追蹤資料清掉 ${purged} 筆`);
 
   // ---- 2. 更新追蹤狀態（新上架／價格歷史／下架）----
   const sold = load(F.sold, { watch: {}, hits: [] });

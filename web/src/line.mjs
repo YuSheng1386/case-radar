@@ -655,12 +655,14 @@ export async function lineStatus(env) {
   const tw = new Date(Date.now() + 8 * 3600e3 - 864e5);   // 昨天（台灣日期）
   const ymd = `${tw.getUTCFullYear()}${String(tw.getUTCMonth() + 1).padStart(2, '0')}${String(tw.getUTCDate()).padStart(2, '0')}`;
   const ids = String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
+  // 推播對象跟 pushq.mjs 一樣：有設 LINE_TO 用它，沒設就是查詢名單全部
+  const pushTo = new Set(String(env.LINE_TO || env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean));
   const [quota, used, fol, bot, ...profiles] = await Promise.all([get('/v2/bot/message/quota'), get('/v2/bot/message/quota/consumption'),
     get(`/v2/bot/insight/followers?date=${ymd}`), get('/v2/bot/info'), ...ids.map(id => get(`/v2/bot/profile/${id}`))]);
   return {
     bot: bot.displayName, quota: quota.type === 'limited' ? quota.value : quota.type, used: used.totalUsage,
     followers: fol.status === 'ready' ? { date: ymd, friends: fol.followers, targeted: fol.targetedReaches, blocks: fol.blocks } : fol,
-    allow: ids.map((id, i) => ({ id: id.slice(0, 5) + '…' + id.slice(-4), name: profiles[i].displayName || `（查不到：${profiles[i].error}，可能沒加好友）`, push: i === 0 }))
+    allow: ids.map((id, i) => ({ id: id.slice(0, 5) + '…' + id.slice(-4), name: profiles[i].displayName || `（查不到：${profiles[i].error}，可能沒加好友）`, push: pushTo.has(id) }))
   };
 }
 

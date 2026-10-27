@@ -59,7 +59,7 @@ async function caseLink(c, deadNote) {
       if (r.ok) return deadNote(SITE, (await r.json()).token);
     }
   } catch {}
-  return `⚠️平台刊登可能已下架（${c.address || c.district || ''}）`;
+  return `⚠️平台刊登可能已下架（${[c.address, c.district].find(s => s && !s.includes('�')) || ''}）`;
 }
 
 const cardLine = c => {
@@ -72,7 +72,10 @@ const cardLine = c => {
   // 自售／低於實登／同等級仍低 上面已寫成具體數字；降價有實測降幅時也已寫過
   for (const t of c.tags || []) if (!['自售', '低於實登', '同等級仍低', '降價'].includes(t) || (t === '降價' && !(c.drop >= 2))) why.push(t === '標低於行情' ? '標示低於行情' : t);
   const url = c._url ?? srcUrls(c)[0] ?? '';
-  return `・${c.score}分｜${c.district} ${c.community || cut(c.title, 14)} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}\n  ${[...new Set(why)].join('・') || '分數高'}\n  ${url}`;
+  // 10/27 前抓的 591 資料有亂碼（U+FFFD）→ 有亂碼的欄位不顯示，改用下一個（重抓後就會正常）
+  const ok = s => (s && !String(s).includes('�') ? String(s) : '');
+  const name = ok(c.community) || cut(ok(c.title), 14) || ok(c.address);
+  return `・${c.score}分｜${ok(c.district)} ${name} ${c.price}萬 ${c.area ?? '—'}坪 ${c.floor || ''}\n  ${[...new Set(why)].join('・') || '分數高'}\n  ${url}`;
 };
 
 async function main() {
@@ -91,7 +94,25 @@ async function main() {
   const qual = data.cards.filter(c => !c.wide && c.ownerGone == null && (ownerOnly(c) || c.score >= NOTIFY_SCORE));
   // 剛加進主力區的區（例如 10/24 加太平）：這次當基準不推，免得原本就在的好案一次全被當新案
   const prevDs = st.districts || ['南區', '西區', '南屯區', '大里區', '東區'];   // 還沒記錄過＝加太平之前的五區
-  const newCards = qual.filter(c => !st.cards[c.id] && prevDs.includes(c.district));
+  // 某平台這次筆數暴增（爬蟲修好、抓得更完整；或第一次記錄）→ 只有這些平台在賣的案件這次當基準不推
+  //   10/25 住商修好後第一次完整更新，一次多了 3800 筆舊刊登，被當新案推了 249 件
+  //   591 平常增量只翻前段（約 7 千筆）、週日完整翻（約 3.8 萬筆）→ 分開記，不然每週日都會被當暴增
+  const cntKey = k => k === '591' ? `591${data.run?.sweep591 ? '/完整' : '/增量'}` : k;
+  const runCnt = Object.fromEntries(Object.entries(data.run?.sources || {}).filter(([, v]) => v.ok && v.count).map(([k, v]) => [cntKey(k), v.count]));
+  // 還沒記錄過 → 用 10/27 雲端實測的筆數當起點（信義是修好前的 1995，修好後第一次完整更新會被認出暴增）
+  const prevCnt = st.srcCount || { '591/增量': 7000, '591/完整': 38000, '591全市': 950, '信義': 1995, '住商': 5237, '東森': 236 };
+  const jumped = new Set(Object.keys(runCnt).filter(k => !prevCnt[k] || (runCnt[k] > prevCnt[k] * 1.5 && runCnt[k] - prevCnt[k] > 300))
+    .map(k => k.replace(/\/.*/, '')));
+  st.srcCount = { ...prevCnt, ...runCnt };
+  const isBaseline = c => jumped.size && (c.sources || []).length && c.sources.every(s => jumped.has(s.s));
+  // 新加的區還要等 591 完整翻過一次（週日）才推：增量模式只翻前段，第一次完整翻會翻出一堆早就在賣的舊刊登
+  //   10/25（週日）北屯、西屯加進來後第一次完整翻，249 件被當新案推出去（其中 9 成是這兩區的 591 舊刊登）
+  const sweptDs = st.sweptDs || data.districts;   // 還沒記錄過＝現有的區都完整翻過了（10/25）
+  const newAll = qual.filter(c => !st.cards[c.id] && prevDs.includes(c.district) && sweptDs.includes(c.district));
+  if (data.run?.sweep591) st.sweptDs = data.districts;
+  else st.sweptDs = sweptDs.filter(d => data.districts.includes(d));
+  const newCards = newAll.filter(c => !isBaseline(c));
+  if (newAll.length > newCards.length) console.log(`[通知] ${[...jumped].join('、')} 筆數暴增或第一次記錄：${newAll.length - newCards.length} 件只建基準不推`);
   st.districts = data.districts;
   for (const c of qual) st.cards[c.id] = st.cards[c.id] || now;
   const qualIds = new Set(qual.map(c => c.id));
