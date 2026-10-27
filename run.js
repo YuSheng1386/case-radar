@@ -302,6 +302,8 @@ async function main() {
     if (ownerOnly) { score += 8; why.push('只有屋主在賣+8'); }
     if (allGone) why.push(`屋主刊登已下架${ownerGone}天（可能只是廣告到期）`);
     if (agentCount >= 5) { score -= 5; why.push(`${agentCount}位仲介在刊-5`); }
+    // 分數是逐項加總，訊號多的會破百（10/27 最高 120）→ 封頂 100，加分明細照列
+    if (score > 100) { why.push(`合計${score}，封頂100`); score = 100; }
     // 門檻 20 分：只有「標示降價」（591 降價旗標很氾濫，實測只便宜約 5%）或只有「超值」不夠格；屋主刊登的都列
     const hot = score >= (cfg.minScore ?? 20) || owner;
 
