@@ -5,6 +5,7 @@
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
 import { webhook as lineWebhook, pushWelcome, lineStatus } from './line.mjs';
+import { ingest as pushIngest, flush as pushFlush, CRON as PUSH_CRON } from './pushq.mjs';
 import { geocode } from './geo.mjs';
 import { store } from './store.mjs';
 import { CASE_TTL } from './linkcheck.mjs';
@@ -100,6 +101,11 @@ export default {
     } catch (e) {
       return err('伺服器錯誤：' + e.message, 500);
     }
+  },
+  // 定時觸發（wrangler.toml crons）：LINE 新案推播準點 9 點、20 點（GitHub 排程常晚，所以放這裡）
+  async scheduled(ev, env, ctx) {
+    const why = PUSH_CRON[ev.cron];
+    if (why) ctx.waitUntil(pushFlush(env, why).then(r => console.log('[推播]', ev.cron, JSON.stringify(r))));
   }
 };
 
@@ -158,6 +164,15 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/line-status' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     return json(await lineStatus(env));
+  }
+  // 新案推播：GitHub 排程交進這次的新案（tools/notify.js），併進佇列、白天符合條件就推（web/src/pushq.mjs）
+  //   now／flush 只給本機測試（.dev.vars TEST_NOW=1）：假裝現在幾點、手動觸發準點推
+  if (p === '/api/ingest/notify' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const b = await body(req);
+    const ms = env.TEST_NOW === '1' && b.now ? Date.parse(b.now + 'Z') - 8 * 3600e3 : Date.now();
+    if (env.TEST_NOW === '1' && b.flush) return json(await pushFlush(env, b.flush, ms));
+    return json(await pushIngest(env, b, ms));
   }
   // 推播用案件快照（tools/notify.js：各平台刊登都打不開的新案）：存 case-<token>，回傳 token；頁面 /c/<token>
   if (p === '/api/ingest/case' && m === 'POST') {

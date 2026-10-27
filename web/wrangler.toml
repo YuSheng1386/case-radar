@@ -18,6 +18,10 @@ database_id = "000e10e8-eb72-4107-b0db-49c48cff0809"
 binding = "BLOBS"
 id = "fc5452382a434781bd34f14903e5c99a"
 
+# 定時觸發（UTC）：LINE 新案推播台灣 09:00 推整晚累積的、20:00 收尾（web/src/pushq.mjs CRON）
+[triggers]
+crons = ["0 1 * * *", "0 12 * * *"]
+
 # 秘密值用 `npx wrangler secret put`：
 #   INGEST_KEY  GitHub Actions 上傳資料用
 #   SETUP_CODE  第一次建立管理者帳號用
