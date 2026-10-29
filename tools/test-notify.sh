@@ -18,7 +18,10 @@ http.createServer((q,r)=>{
   else{r.statusCode=404;r.end("{}");}
 }).listen(8798);' &
 SRV=$!; sleep 0.5
-export RADAR_STATE=$S RADAR_URL=http://127.0.0.1:8798 INGEST_KEY=x
+# 資料複本：所有案件改成剛抓到（notify 只推 3 天內第一次抓到或降價的，正式資料多半是舊案）
+mkdir -p $S/docs; cp docs/pool.json $S/docs/
+node -e 'const [i,o]=process.argv.slice(1);const d=require(i);const t=new Date().toISOString();d.cards.forEach(c=>c.firstSeen=t);require("fs").writeFileSync(o,JSON.stringify(d))' ./docs/data.json $S/docs/data.json
+export RADAR_STATE=$S RADAR_URL=http://127.0.0.1:8798 INGEST_KEY=x RADAR_DOCS=$S/docs
 ok() { echo "  ✓ $1"; }; bad() { echo "  ✗ $1"; FAIL=1; }; FAIL=0
 sent() { cat $S/sent 2>/dev/null; }
 # 開發清單拿掉 N 件 → 下次變新案；客戶基準拿掉 N 件 → 下次變新配對
@@ -32,6 +35,21 @@ echo "$OUT" | grep -q '1 位有新配對共 3 件' && ok "新配對 3 件" || ba
 echo "$OUT" | grep -q '測試客：3 件' && ok "LINE 預覽含客戶新配對" || bad "預覽客戶"
 echo "$OUT" | grep -q '新的可開發】2 件' && ok "LINE 預覽含新可開發 2 件" || bad "預覽開發"
 [ "$(NOTIFY_DRY=1 node tools/notify.js | grep -c 'LINE 訊息預覽')" = 0 ] && ok "交過的不再交" || bad "重複交"
+# 舊案（10 天前抓到）不當新案；其中一件昨天降價 → 照推（10/29 亂碼修好後 86 件舊案被當新案推）
+D=$S/docs/data.json
+ageCards() { node -e 'const [sf,df,n,drop]=process.argv.slice(1);const s=require(sf),d=require(df);const ids=new Set(Object.keys(s.cards).slice(0,+n));
+  const old=new Date(Date.now()-10*864e5).toISOString(),y=new Date(Date.now()-864e5).toISOString();let k=0;
+  for(const c of d.cards)if(ids.has(c.id)){c.firstSeen=old;if(k++<+drop&&c.sources[0])c.sources[0].hist=[[old,c.price+100],[y,c.price]];}
+  require("fs").writeFileSync(df,JSON.stringify(d))' $S/notify.json $D $1 $2; }
+cp $D $S/data.bak; ageCards 3 0; dropCards 3
+OUT=$(NOTIFY_DRY=1 node tools/notify.js)
+echo "$OUT" | grep -q '3 件是 3 天前就在賣' && ! echo "$OUT" | grep -q 'LINE 訊息預覽' && ok "舊案 3 件只建基準不推" || bad "舊案：$OUT"
+cp $S/data.bak $D; ageCards 3 1; dropCards 3
+OUT=$(NOTIFY_DRY=1 node tools/notify.js)
+echo "$OUT" | grep -q '新的可開發】1 件' && ok "舊案昨天降價 → 照推 1 件" || bad "舊案降價：$OUT"
+cp $S/data.bak $D; dropCards 35
+OUT=$(NOTIFY_DRY=1 node tools/notify.js)
+echo "$OUT" | grep -q '只推最近的 30 件，其餘 5 件' && echo "$OUT" | grep -q '新的可開發】30 件' && ok "一次 35 件新案 → 只推 30 件" || bad "上限：$OUT"
 # 非乾跑：新配對寫網站＋新案交給網站推播佇列
 dropMatch 2; dropCards 2
 node tools/notify.js | grep -q '網站累積 2 件' && [ "$(cat $S/posted)" = 2 ] && [ "$(sent)" = "2 1  ok" ] && ok "新配對寫網站、交 2 件＋1 位客戶給推播佇列（欄位齊）" || bad "交給網站：$(sent)"

@@ -23,6 +23,8 @@ const TEST = process.env.NOTIFY_TEST === '1';
 const NOTIFY_SCORE = +(process.env.NOTIFY_SCORE || 60);
 const MATCH_MIN = +(process.env.MATCH_MIN || 30);
 const PER_CLIENT_MAX = 10;     // 每位客戶每次最多記幾件新配對（避免資料大變動時洗版）
+const RECENT_MS = 3 * 864e5;   // 開發新案：第一次抓到或最近一次降價在 3 天內才算新
+const NEW_MAX = 30;            // 開發新案：一次最多交幾件（避免資料大變動時洗版）
 const SITE = (RADAR_URL || 'https://case-radar.yusheng1386.workers.dev').replace(/\/$/, '');
 
 const load = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
@@ -111,8 +113,21 @@ async function main() {
   const newAll = qual.filter(c => !st.cards[c.id] && prevDs.includes(c.district) && sweptDs.includes(c.district));
   if (data.run?.sweep591) st.sweptDs = data.districts;
   else st.sweptDs = sweptDs.filter(d => data.districts.includes(d));
-  const newCards = newAll.filter(c => !isBaseline(c));
-  if (newAll.length > newCards.length) console.log(`[通知] ${[...jumped].join('、')} 筆數暴增或第一次記錄：${newAll.length - newCards.length} 件只建基準不推`);
+  const notJumped = newAll.filter(c => !isBaseline(c));
+  if (newAll.length > notJumped.length) console.log(`[通知] ${[...jumped].join('、')} 筆數暴增或第一次記錄：${newAll.length - notJumped.length} 件只建基準不推`);
+  // 舊案不當新案：第一次抓到超過 3 天、這 3 天也沒降價 → 只建基準不推
+  //   10/29 清晨亂碼修好後，86 件 10/20–10/24 就在賣的舊案第一次符合條件，被當新案推了 107 件
+  //   降價的舊案照推（hist 最近 3 天有比前一筆低的價格）
+  const lastEvt = c => Math.max(Date.parse(c.firstSeen) || 0, ...(c.sources || []).flatMap(s =>
+    (s.hist || []).filter(([, p], i, h) => i && p < h[i - 1][1]).map(([t]) => Date.parse(t) || 0)));
+  const fresh3 = c => !c.firstSeen || Date.now() - lastEvt(c) <= RECENT_MS;
+  let newCards = notJumped.filter(fresh3);
+  if (notJumped.length > newCards.length) console.log(`[通知] ${notJumped.length - newCards.length} 件是 3 天前就在賣、最近沒降價的舊案：只建基準不推`);
+  // 一次還是太多（資料大變動）→ 只推最近的 NEW_MAX 件，其餘只建基準
+  if (newCards.length > NEW_MAX) {
+    console.log(`[通知] 新案 ${newCards.length} 件超過 ${NEW_MAX} 件：只推最近的 ${NEW_MAX} 件，其餘 ${newCards.length - NEW_MAX} 件只建基準`);
+    newCards = newCards.sort((a, b) => lastEvt(b) - lastEvt(a)).slice(0, NEW_MAX);
+  }
   st.districts = data.districts;
   for (const c of qual) st.cards[c.id] = st.cards[c.id] || now;
   const qualIds = new Set(qual.map(c => c.id));
