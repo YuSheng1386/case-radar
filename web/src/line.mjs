@@ -77,7 +77,7 @@ const GROUPS = {
 // 特色 → 標題／社區／地址要出現的字
 const FEATURES = [
   [/近?捷運|MRT/i, '近捷運', '捷運|MRT'], [/學區|近學校|明星學區/, '學區', '學區|國小|國中|學校|明星'],
-  [/近?公園|綠地/, '近公園', '公園|綠地'], [/景觀|視野|view/i, '景觀', '景觀|視野|view|景'],
+  [/近?公園|綠地/, '近公園', '公園|綠地'], [/景觀|視野|view/i, '景觀', '景觀|視野|view|[山湖河海夜市園]景|景色|棟距'],
   [/邊間/, '邊間', '邊間|三面採光'], [/採光/, '採光', '採光|明亮|邊間'], [/陽台/, '陽台', '陽台'],
   [/車庫/, '車庫', '車庫'], [/店面|店住|金店/, '店面', '店面|店住|金店|商用'], [/大面寬|面寬|臨路|角地/, '面寬臨路', '面寬|臨路|角地|三角窗'],
   [/重劃區/, '重劃區', '重劃'], [/近?市場|生活機能/, '生活機能', '市場|機能|商圈'], [/近?醫院/, '近醫院', '醫院|醫學'],
@@ -88,7 +88,14 @@ const FEATURES = [
 // 認不得但沒意義的字（不當關鍵字）
 const STOP = ['可開發', '開發', '案件', '物件', '房子', '房屋', '我要', '我想', '幫我', '請', '想找', '想要', '想看', '想買', '要找', '找', '列出', '列表', '全部', '所有',
   '有沒有', '有哪些', '有什麼', '推薦', '看看', '一下', '給我', '查詢', '區域', '台中市', '台中', '還有', '在賣', '出售', '的話', '一點', '比較', '以及',
-  '不要', '以外', '的', '嗎', '呢', '吧', '喔', '啊', '和', '跟'];
+  '不要', '以外', '的', '嗎', '呢', '吧', '喔', '啊', '和', '跟', '最好有', '最好', '希望', '盡量', '儘量', '優先', '偏好'];
+// 「最好有視野」「希望高樓層」「邊間優先」→ 加分條件：不篩掉，有符合的排前面（只篩的話一個沒寫到的特色就全部查不到）
+const PREF = '最好|希望|盡量|儘量|偏好|可以的話|如果可以|如果有|能的話|加分';
+// 重劃區期別：「十期」「14期」「第七期重劃區」→ 標題／社區／地址寫中文或數字都算
+//   多數案件標題不會寫期別 → 當加分條件（區域照區名篩），有寫的排前面
+const CN = ['', '一', '二', '三', '四', '五', '六', '七', '八', '九'];
+const cn2 = n => n < 10 ? CN[n] : (n >= 20 ? CN[Math.floor(n / 10)] : '') + '十' + CN[n % 10];
+const n2 = m => /\d/.test(m) ? +m : m.includes('十') ? (m.split('十')[0] ? CN.indexOf(m.split('十')[0]) : 1) * 10 + (CN.indexOf(m.split('十')[1]) || 0) : CN.indexOf(m);
 
 // 中文數字（二十年、三房、五樓）→ 阿拉伯數字；只換後面接單位的，避免「七期」「三民路」被改掉
 function cnum(s) {
@@ -139,10 +146,16 @@ const CUT = /\d|透天|電梯|大樓|公寓|華廈|別墅|套房|車位|屋齡|�
 const NUM = String.raw`(\d+(?:\.\d+)?)`;
 const range = (a, b, u) => a != null && b != null ? `${a}–${b}${u}` : a != null ? `≥${a}${u}` : `≤${b}${u}`;
 
-export function parse(text, districts, main, where = {}) {
+export function parse(text, districts, main, where = {}, soft = false) {
   let s = normalize(text);
   const conds = [];
   const q = { ds: [], conds, sort: null, scope: '', mode: 'dev' };
+  // ---- 加分條件（最好有視野、邊間優先）：先切出來，最後各自解析成條件再標 soft ----
+  const prefs = [];
+  if (!soft) {
+    s = s.replace(new RegExp(`(?:${PREF})(?:是|有|要|能|可以|在)?\\s?([^\\s]+)`, 'g'), (_, w) => { prefs.push(w); return ' '; })
+      .replace(/(?<=^|\s)([^\s]+?)(?:優先|加分)(?=\s|$)/g, (_, w) => { prefs.push(w); return ' '; });
+  }
   // ---- 開發／配對 ----
   //   開發（預設）：有競爭力、分數夠的案件；配對：案件池裡所有在架物件，只要符合條件都列（幫客人找房）
   if (/配對|買方|客戶|客人|買家|幫客|所有物件|全部物件|不限分數|一般物件/.test(s)) {
@@ -315,6 +328,10 @@ export function parse(text, districts, main, where = {}) {
     [/低於實登|低於行情|比行情低|低於市價|便宜/, '低於實登', '低於行情']]) take(re, () => add('tag', l, t));
 
   // ---- 特色 ----
+  take(/第?([一二三四五六七八九十]{1,3}|\d{1,2})期(?:重劃區?)?/, (_, m) => {
+    const n = n2(m);
+    if (n > 0 && n < 100) { add('kw', `${cn2(n)}期重劃區`, `${cn2(n)}期|(?<!\\d)${n}期`); conds.at(-1).soft = 1; }
+  });
   for (const [re, l, kw] of FEATURES) take(re, () => add('kw', l, kw));
 
   // ---- 剩下的字 → 關鍵字（路名、社區名、特色）----
@@ -334,13 +351,17 @@ export function parse(text, districts, main, where = {}) {
   }
   // 沒打區域但打了路名／社區名 → 用地名表找在哪幾區（崇德路在北屯，不在主力五區）；表裡沒有就找全台中
   if (free.length && q.scope === '主力區') {
+    q.needWhere = true;   // 地名表另存 line-where，Worker 看到這個才讀、再解析一次
     const hit = new Set();
     for (const w of free) for (const [k, ix] of Object.entries(where)) if (k.includes(w) || (w.length >= 3 && w.includes(k))) ix.forEach(i => hit.add(districts[i]));
     q.ds = hit.size ? [...hit].filter(Boolean) : [...districts];
     q.scope = hit.size && hit.size <= 4 ? q.ds.join('、') : '全台中';
   }
+  // 加分條件：用同一套規則解析（附近／區域不算），標 soft
+  for (const w of prefs) for (const c of parse(w, districts, main, where, true).conds) if (c.k !== 'near') { c.soft = 1; conds.push(c); }
+  for (const c of conds) if (c.soft && !c.l.includes('加分')) c.l += '（加分）';
   // 什麼都沒打（例如「你好」只會剩關鍵字「你好」）→ 回說明
-  q.none = q.scope === '主力區' && !conds.length && !q.sort && (q.mode === 'match' || (!q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text))));
+  q.none =q.scope === '主力區' && !conds.length && !q.sort && (q.mode === 'match' || (!q.sm && !/可開發|案件|全部|列出|有哪些/.test(String(text))));
   // 配對只打「配對」沒有任何條件 → 主力區幾千件沒意義，回說明
   return q;
 }
@@ -368,7 +389,7 @@ function test(c, x) {
     case 'ty': return x.ty === c.a;
     case 'rt': return (x.rt || '').includes(c.a);
     case 'sc': return x.sc >= c.a;
-    case 'age': return inR(x.ag);
+    case 'age': return inR(typeof x.ag === 'string' ? parseFloat(x.ag) : x.ag);   // 舊索引屋齡是文字「6.9年」
     case 'p': return inR(x.p);
     case 'up': return inR(x.up);
     case 'ar': return inR(x.ar);
@@ -413,12 +434,16 @@ const SORT_L = { p: '總價低的先', up: '單價低的先', f: '最新上架�
 
 export function filter(items, q, conds = q.conds) {
   const smOk = x => q.sm === 'inc' || (q.sm === 'only' ? x.sm : !x.sm);
-  return items.filter(x => smOk(x) && conds.every(c => test(c, x))).sort((a, b) => (q.sort ? SORTS[q.sort](a, b) : q.mode === 'match' ? SORTS.p(a, b) : 0) || b.sc - a.sc);
+  const hard = conds.filter(c => !c.soft), soft = conds.filter(c => c.soft);
+  const res = items.filter(x => smOk(x) && hard.every(c => test(c, x)));
+  // 加分條件：符合越多的排越前面，同分再照原本的排序
+  if (soft.length) for (const x of res) x._sf = soft.reduce((n, c) => n + (test(c, x) ? 1 : 0), 0);
+  return res.sort((a, b) => (soft.length ? b._sf - a._sf : 0) || (q.sort ? SORTS[q.sort](a, b) : q.mode === 'match' ? SORTS.p(a, b) : 0) || b.sc - a.sc);
 }
 
 // 查不到 → 每次拿掉一個條件，看各有幾件
 export function relax(items, q) {
-  return q.conds.map((c, i) => [c.l, filter(items, q, q.conds.filter((_, j) => j !== i)).length]).filter(x => x[1]).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  return q.conds.map((c, i) => c.soft ? null : [c.l, filter(items, q, q.conds.filter((_, j) => j !== i)).length]).filter(x => x && x[1]).sort((a, b) => b[1] - a[1]).slice(0, 3);
 }
 
 export function page(res, q, off, at, items) {
@@ -429,6 +454,7 @@ export function page(res, q, off, at, items) {
     const rx = items ? relax(items, q) : [];
     return `${head}\n${q.mode === 'match' ? '目前沒有符合的物件' : '目前沒有符合的可開發案件'}（資料 ${when}）` +
       (rx.length ? '\n\n放寬看看：\n' + rx.map(([l, n]) => `・拿掉「${l.replace(/[「」]/g, '')}」有 ${n} 件`).join('\n') : '') +
+      (q.mode === 'match' ? '' : '\n\n幫客人找房（所有在架物件、不限分數）→ 前面加「配對」') +
       '\n\n打「說明」看可以用的條件';
   }
   const sl = res.slice(off, off + PAGE);
@@ -468,17 +494,30 @@ async function reply(env, token, texts, quick = false) {
 // 案件池陣列 → 物件（欄位順序 meta.pkeys，tools/line-index.js PKEYS）
 //   不逐欄複製（6000 件 × 18 欄太耗 CPU），改成包一層、欄位用 getter 直接讀陣列
 const NONE = [];
-let Pool = null, PoolKeys = '';
-export function poolItem(a, keys, d) {
-  if (PoolKeys !== keys.join()) {
-    Pool = function (a, d) { this.a = a; this._d = d; };
+let Pool = null, PoolKeys = '', PoolRef = null;
+export function poolItem(a, keys, d, j) {
+  // 同一次查詢 keys 是同一個陣列 → 先比參考，不要每件都 join（4800 件 × join 約 2 ms）
+  if (keys !== PoolRef && PoolKeys !== keys.join()) {
+    Pool = function (a, d, j) { this.a = a; this._d = d; this._j = j; this.t = ''; };
     keys.forEach((k, i) => Object.defineProperty(Pool.prototype, k, {
       get: k === 'f' ? function () { return this.a[i] * 1000; } : k === 'tg' ? function () { return this.a[i] || NONE; } : function () { return this.a[i]; }
     }));
     Object.defineProperty(Pool.prototype, 'dr', { get: () => 0 });
     PoolKeys = keys.join();
   }
-  return new Pool(a, d);
+  PoolRef = keys;
+  return new Pool(a, d, j);
+}
+
+// 顯示文字 line-x／line-px：新格式第一行 {d, v:2}、之後一件一行 [id, 內容]（順序同 items，x._j）→ 只 parse 要顯示的行
+//   整份 JSON.parse 北屯就約 2 ms，加上案件池超過免費方案 10 ms CPU，回覆送不出去（10/30「北屯 十期…有視野」沒回）
+//   舊格式（{d, x:{id: 內容}}，一整行）照樣讀，索引還沒重建前不會壞
+export function rowsOf(raw) {
+  if (!raw) return null;
+  const nl = raw.indexOf('\n');
+  if (nl < 0) { const o = JSON.parse(raw); return { d: o.d, get: x => o.x?.[x.id] }; }
+  const head = JSON.parse(raw.slice(0, nl)), lines = raw.slice(nl + 1).split('\n');
+  return { d: head.d, get: x => { const r = x._j != null && lines[x._j] ? JSON.parse(lines[x._j]) : null; return r && r[0] === x.id ? r[1] : undefined; } };
 }
 
 // 配對模式每件一行（案件池沒有預先排好的文字）：總價先，客人最在意
@@ -506,7 +545,8 @@ export async function answerFor(S, uid, text) {
     if (!st) return '沒有上一次的查詢，直接打條件，例如「東區優質透天」';
     src = st.text; off = st.off + PAGE;
   }
-  const q = parse(src, meta.districts, meta.main, meta.where || {});
+  let q = parse(src, meta.districts, meta.main, meta.where || {});
+  if (q.needWhere && !meta.where) { const w = await S.get('line-where', 'json'); if (w) q = parse(src, meta.districts, meta.main, w); }
   if (q.none) return HELP;
   // 案件只有路名時的位置：路名座標表（tools/roads.js → line-index 的 line-roads），附近查詢或畫地圖時才讀
   let R = null;
@@ -533,8 +573,8 @@ export async function answerFor(S, uid, text) {
   const needT = q.mode === 'match' && q.conds.some(c => c.k === 'kw' || c.k === 'pkt' || c.k === 'pkn');
   const tks = needT ? await Promise.all(q.ds.map(d => S.get(`line-pt${meta.districts.indexOf(d)}`, 'json'))) : [];
   const items = parts.flatMap((p, i) => !p || p.d !== q.ds[i] ? [] : q.mode === 'match'
-    ? p.items.map((a, j) => { const o = poolItem(a, meta.pkeys, p.d); if (needT) o.t = tks[i]?.t[j] || ''; return o; })
-    : p.items.map(x => (x._d = p.d, x)));
+    ? p.items.map((a, j) => { const o = poolItem(a, meta.pkeys, p.d, j); if (needT) o.t = tks[i]?.t[j] || ''; return o; })
+    : p.items.map((x, j) => (x._d = p.d, x._j = j, x)));
   const res = filter(items, q);
   // 附近：每件算距離；沒指定排序就近的先
   let noLoc = 0;
@@ -549,11 +589,11 @@ export async function answerFor(S, uid, text) {
   const mapItems = off ? [] : res.slice(0, MAP_MAX);
   const show = [...new Set([...sl, ...mapItems])];
   const need = [...new Set(show.map(x => x._d))];
-  const tx = await Promise.all(need.map(d => S.get(`${q.mode === 'match' ? 'line-px' : 'line-x'}${meta.districts.indexOf(d)}`, 'json')));
-  const byD = Object.fromEntries(tx.filter(Boolean).map(t => [t.d, t.x]));
+  const tx = await Promise.all(need.map(d => S.get(`${q.mode === 'match' ? 'line-px' : 'line-x'}${meta.districts.indexOf(d)}`, 'text')));
+  const byD = Object.fromEntries(tx.map(rowsOf).filter(Boolean).map(t => [t.d, t]));
   for (const x of show) {
-    if (q.mode === 'match') [x.n, x.fs, x.ly, x.u, x.ua] = byD[x._d]?.[x.id] || [];
-    else x.x = x.x || byD[x._d]?.[x.id] || `・${x.sc}分｜${x._d} ${x.p}萬`;
+    if (q.mode === 'match') [x.n, x.fs, x.ly, x.u, x.ua] = byD[x._d]?.get(x) || [];
+    else x.x = x.x || byD[x._d]?.get(x) || `・${x.sc}分｜${x._d} ${x.p}萬`;
   }
   // 傳出前測連結（這一頁）：同一案多個平台時傳打得開的那個；全部失效照樣列，改附網站案件頁
   await Promise.all(sl.map(async x => {

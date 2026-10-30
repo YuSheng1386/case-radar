@@ -1,8 +1,8 @@
 // LINE 對話查詢用的精簡案件索引（GitHub Actions：notify 之後跑）
 //   網站 Worker 免費方案每次只有 10ms CPU → 不能解析整份 cards，這裡先拆成每區一小份
-//   line-meta：{at, districts, main, where: {路名/社區: [區序號]}}
-//   開發：line-<n>：{d: districts[n], items}（篩選欄位）；line-x<n>：{d, x: {id: LINE 文字}}
-//   配對：line-p<n>：{d, items}（案件池，所有在架物件，陣列）；line-pt<n>：{d, t}（關鍵字欄位）；line-px<n>：{d, x}（顯示欄位）
+//   line-meta：{at, districts, main, pkeys, box}；line-where：{路名/社區: [區序號]}
+//   開發：line-<n>：{d: districts[n], items}（篩選欄位）；line-x<n>：一件一行 [id, LINE 文字]（見 rows()）
+//   配對：line-p<n>：{d, items}（案件池，所有在架物件，陣列）；line-pt<n>：{d, t}（關鍵字欄位）；line-px<n>：一件一行 [id, 顯示欄位]
 //   每件的 LINE 文字（x）在這裡先排好，Worker 只負責篩選＋接字串
 //   本機看：node tools/line-index.js --dry
 const fs = require('fs');
@@ -18,6 +18,8 @@ const DRY = process.argv.includes('--dry');
 // 類型統一成：大樓（電梯大樓／大樓／華廈）、透天（透天厝／透天／別墅）、公寓
 const typeOf = t => /透天|別墅/.test(t || '') ? '透天' : /公寓/.test(t || '') ? '公寓' : /大樓|華廈/.test(t || '') ? '大樓' : '';
 const rooms = ly => { const m = String(ly || '').match(/(\d+)\s*房/); return m ? +m[1] : null; };
+// 屋齡有的來源是文字「6.9年」（10/30 北屯案件池將近一半）→ 存數字，不然 LINE「10年內」比不到、整批漏掉
+const ageOf = a => { const v = parseFloat(a); return isFinite(v) ? v : null; };
 // 樓層 → [最低, 最高, 總樓層]：「5F/26F」「1F~4F/4F」「B1-4F/4F」「整棟/3F」（B1 算 0）
 function floors(s) {
   s = String(s || '');
@@ -54,7 +56,7 @@ function build(data, pool = null, roads = null) {
   for (const c of all) {
     const own = c.posters?.owner ? (c.posters.agents === 0 ? 2 : 1) : 0;
     (by[c.district] = by[c.district] || []).push({
-      id: c.id, ty: typeOf(c.type), rt: c.type || '', ag: c.age ?? null, p: c.price, ar: c.area ?? null, r: rooms(c.layout),
+      id: c.id, ty: typeOf(c.type), rt: c.type || '', ag: ageOf(c.age), p: c.price, ar: c.area ?? null, r: rooms(c.layout),
       up: c.unitPrice ?? null, ma: c.mainArea ?? null, fl: floors(c.floor), pk: parkOf(c), pt: c.parkType || '',
       // 關鍵字比對用（路名、社區、標題、591 特色標籤：近捷運、明星學區、制震宅…）
       t: `${c.title || ''} ${c.community || ''} ${(c.address || '').replace(/^台中市/, '')} ${(c.features || []).join(' ')}`.replace(/臺/g, '台'),
@@ -71,7 +73,7 @@ function build(data, pool = null, roads = null) {
   for (const x of pool?.items || []) {
     const rt = /華廈|別墅|套房|店面|公寓/.test(x.ty || '') ? x.ty : '';   // 一般大樓／透天不用存原始類型
     const t = `${cut(x.t, 24)}${x.c || ''} ${(x.a || '').replace(/^台中市\S{1,3}區/, '')} ${(x.ft || []).join(' ')}`.replace(/臺/g, '台').trim();
-    (pby[x.d] = pby[x.d] || []).push([x.id, typeOf(x.ty), rt, x.ag ?? null, x.p ?? null, x.ar ?? null, rooms(x.ly),
+    (pby[x.d] = pby[x.d] || []).push([x.id, typeOf(x.ty), rt, ageOf(x.ag), x.p ?? null, x.ar ?? null, rooms(x.ly),
       x.up ?? null, x.ma ?? null, floors(x.fl), x.pk ?? null, x.pt ? x.pt.replace(/式$/, '') : '',
       x.sc, x.own || 0, (x.tg || []).length ? x.tg : 0, Math.round((Date.parse(x.f) || 0) / 1000), x.same ? 1 : 0,
       ll5(x.ll), x.ll ? null : rk(x.d, x.a)]);
@@ -98,19 +100,27 @@ function build(data, pool = null, roads = null) {
   return {
     roads: { keys: rkeys, pts: rpts },
     meta: { at: data.generatedAt, districts, main: data.districts, pkeys: PKEYS,
-      box: Object.fromEntries(Object.entries(box).map(([d, b]) => [districts.indexOf(d), b])),
-      where: Object.fromEntries(Object.entries(where).map(([w, s]) => [w, [...s]])) },
+      box: Object.fromEntries(Object.entries(box).map(([d, b]) => [districts.indexOf(d), b])) },
+    // 地名表另存 line-where（70 KB，每次查詢都 parse 要 1 ms）：只有打路名／社區又沒打區域時 Worker 才讀
+    where: Object.fromEntries(Object.entries(where).map(([w, s]) => [w, [...s]])),
     parts: districts.map(d => ({ d, items: (by[d] || []).map(({ x, ...r }) => r) })),
-    texts: districts.map(d => ({ d, x: Object.fromEntries((by[d] || []).map(it => [it.id, it.x])) })),
+    texts: districts.map(d => rows(d, (by[d] || []).map(it => [it.id, it.x]))),
     pparts: districts.map(d => ({ d, items: pby[d] || [] })),
-    ptexts: districts.map(d => ({ d, x: pdisp[d] || {} })),
+    ptexts: districts.map(d => rows(d, (pby[d] || []).map(a => [a[0], pdisp[d][a[0]]]))),
     pkw: districts.map(d => ({ d, t: ptk[d] || [] }))
   };
 }
 
+// 顯示文字（line-x／line-px）：第一行 {d, v:2}，之後一件一行 [id, 顯示內容]，順序跟 line-<n>／line-p<n> 的 items 一樣
+//   Worker 一頁只顯示 8 件＋地圖，整份 JSON.parse（北屯 630 KB 約 2 ms）加上其他就超過免費方案 10 ms CPU、回覆送不出去（10/30）
+//   → Worker 只切行、只 parse 要顯示的那幾行（web/src/line.mjs rowsOf）
+function rows(d, list) {
+  return [JSON.stringify({ d, v: 2 }), ...list.map(r => JSON.stringify(r))].join('\n');
+}
+
 async function put(name, obj) {
   const r = await fetch(`${RADAR_URL.replace(/\/$/, '')}/api/ingest/blob/${name}`, {
-    method: 'PUT', headers: { 'X-Ingest-Key': INGEST_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify(obj)
+    method: 'PUT', headers: { 'X-Ingest-Key': INGEST_KEY, 'Content-Type': 'application/json' }, body: typeof obj === 'string' ? obj : JSON.stringify(obj)
   });
   if (!r.ok) throw new Error(`上傳 ${name} 失敗 HTTP ${r.status}`);
 }
@@ -122,18 +132,19 @@ async function main() {
   try { pool = JSON.parse(fs.readFileSync(path.join(DOCS, 'pool.json'), 'utf8')); } catch {}
   let roadsSt = null;
   try { roadsSt = JSON.parse(fs.readFileSync(path.join(process.env.RADAR_STATE || path.join(ROOT, 'state'), 'roads.json'), 'utf8')); } catch {}
-  const { meta, parts, texts, pparts, ptexts, pkw, roads } = build(data, pool, roadsSt);
+  const { meta, where, parts, texts, pparts, ptexts, pkw, roads } = build(data, pool, roadsSt);
   const located = [...parts.flatMap(x => x.items).filter(it => it.lc || it.rk != null), ...pparts.flatMap(x => x.items).filter(a => a[PKEYS.indexOf('lc')] || a[PKEYS.indexOf('rk')] != null)].length;
   console.log(`[LINE 索引] 有位置 ${located} 件（社區座標或路名座標）；路 ${roads.keys.length} 條 ${(JSON.stringify(roads).length / 1024).toFixed(0)} KB`);
   const kb = a => (a.reduce((s, p) => s + JSON.stringify(p).length, 0) / 1024).toFixed(0);
   console.log(`[LINE 索引] ${meta.districts.length} 區、${data.cards.length} 件＋同體系 ${(data.blocked || []).length} 件，篩選欄位共 ${kb(parts)} KB；` +
-    `案件池 ${pool?.items.length ?? 0} 件 ${kb(pparts)} KB（最大一區 ${(Math.max(...pparts.map(p => JSON.stringify(p).length)) / 1024).toFixed(0)} KB）；地名 ${Object.keys(meta.where).length} 個 ${(JSON.stringify(meta).length / 1024).toFixed(0)} KB`);
+    `案件池 ${pool?.items.length ?? 0} 件 ${kb(pparts)} KB（最大一區 ${(Math.max(...pparts.map(p => JSON.stringify(p).length)) / 1024).toFixed(0)} KB）；地名 ${Object.keys(where).length} 個 ${(JSON.stringify(where).length / 1024).toFixed(0)} KB；meta ${(JSON.stringify(meta).length / 1024).toFixed(0)} KB`);
   if (DRY) return;
   if (!RADAR_URL || !INGEST_KEY) { console.log('[LINE 索引] 缺 RADAR_URL／INGEST_KEY，略過'); return; }
   for (let i = 0; i < parts.length; i++) {
     await put(`line-${i}`, parts[i]); await put(`line-x${i}`, texts[i]); await put(`line-p${i}`, pparts[i]); await put(`line-px${i}`, ptexts[i]); await put(`line-pt${i}`, pkw[i]);
   }
   await put('line-roads', roads);
+  await put('line-where', where);
   await put('line-meta', meta);   // 每份都帶區名，Worker 讀到對不上的（區域剛增減）會略過
 }
 

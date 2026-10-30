@@ -11,6 +11,14 @@ if (!fs.existsSync(MF)) {
   fs.writeFileSync(MF, await r.text());
 }
 const meta = JSON.parse(fs.readFileSync(MF, 'utf8'));
+// 10/30 起地名表另存 line-where
+const WF = '/tmp/line-where.json';
+if (!meta.where && !fs.existsSync(WF)) {
+  const KEY = (process.env.INGEST_KEY || fs.readFileSync(new URL('../web/.ingest-key', import.meta.url), 'utf8')).trim();
+  const r = await fetch('https://case-radar.yusheng1386.workers.dev/api/ingest/blob/line-where', { headers: { 'X-Ingest-Key': KEY } });
+  if (r.ok) fs.writeFileSync(WF, await r.text());
+}
+if (!meta.where && fs.existsSync(WF)) meta.where = JSON.parse(fs.readFileSync(WF, 'utf8'));
 
 const T = [
   // 用戶 10/24 實際打的

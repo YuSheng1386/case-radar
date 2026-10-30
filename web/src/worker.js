@@ -12,7 +12,7 @@ import { CASE_TTL } from './linkcheck.mjs';
 
 const SESSION_DAYS = 30;
 const PBKDF2_ITER = 20000;
-const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7]|line-(meta|roads|(?:x|p|px|pt)?\d{1,2}))$/;
+const BLOB_NAMES = /^(cards|pool|state-[a-z0-9-]+|backup-w[0-7]|line-(meta|roads|where|(?:x|p|px|pt)?\d{1,2}))$/;
 const CLIENT_STATUSES = ['sent', 'liked', 'disliked', 'visit_req', 'booked', 'visited', 'offer', 'dropped'];
 const DEV_STATUSES = ['未聯絡', '已聯絡', '約見面', '簽委託', '放棄'];
 
