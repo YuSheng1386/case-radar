@@ -20,9 +20,11 @@ const F = {
   community: path.join(STATE, 'community.json'),
   market: path.join(STATE, 'market-prices.json'),
   peers: path.join(STATE, 'peers.json'),      // 同等級社區比較：社區列表＋各社區近 2 年成交
-  sold: path.join(STATE, 'sold.json')         // 下架案 → 之後成交的「最後開價 vs 成交價」
+  sold: path.join(STATE, 'sold.json'),        // 下架案 → 之後成交的「最後開價 vs 成交價」
+  desc591: path.join(STATE, 'desc591.json')   // 591 內文抽出的特色標籤（景觀／邊間…）
 };
 const peers = require('./lib/peers');
+const desc591 = require('./lib/desc591');
 
 const load = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
 const save = (f, d) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(d)); };
@@ -257,11 +259,31 @@ async function main() {
   const storeIdx = core.buildStoreIndex(ycData.listings || []);
   const bootstrapCut = Date.parse(tracker.createdAt) + 6 * 3600e3; // 建檔頭 6 小時看到的不算「新上架」
 
+  // ---- 591 內文特色（景觀／邊間…）：標題沒寫、內文才寫的（無限視野、市景、永久棟距）----
+  //   只抓還沒抓過的、新的先；完整更新抓多一點，第一次大概要幾天才補完
+  const descSt = load(F.desc591, {});
+  const ids591 = [];
+  for (const g of groups) for (const m of g.members) if (String(m.source).startsWith('591') && m._gone == null) ids591.push([String(m.sourceId), m._first || '']);
+  ids591.sort((a, b) => b[1].localeCompare(a[1]));
+  const live591 = new Set(ids591.map(x => x[0]));
+  if (process.env.RADAR_SKIP_DESC !== '1') {
+    const t0 = Date.now();
+    const r = await desc591.update(descSt, [...live591], { max: Number(process.env.RADAR_DESC_MAX) || (full ? 2500 : 500) });
+    const pr = desc591.prune(descSt, live591);
+    const withView = [...live591].filter(id => desc591.labels(descSt, id).includes('景觀')).length;
+    console.log(`[591 內文] 這次抓 ${r.ok}／${r.todo} 件（失敗 ${r.fail}${r.stop ? `，停在：${r.stop}` : ''}），還沒抓 ${r.left} 件，清掉下架 ${pr} 件；` +
+      `內文有景觀 ${withView} 件；${Math.round((Date.now() - t0) / 1000)} 秒`);
+    runLog.sources['591內文'] = { ok: !r.stop, fetched: r.ok, left: r.left, ...(r.stop && { error: r.stop }) };
+    save(F.desc591, descSt);
+  }
+  const descOf = ms => ms.flatMap(m => String(m.source).startsWith('591') ? desc591.labels(descSt, String(m.sourceId)) : []);
+
   const cards = [];
   const blocked = [];
   const pool = [];
   for (const g of groups) {
     const ms = g.members.slice().sort((a, b) => trustRank(a.source) - trustRank(b.source));
+    const fts = [...new Set([...ms.flatMap(x => x.features || []), ...descOf(ms)])];
     const pick = f => (ms.find(m => m[f] != null && m[f] !== '') || {})[f];
     const rep = {
       title: (ms.find(m => m.title) || {}).title || '',
@@ -329,7 +351,7 @@ async function main() {
       a5: (ms.find(x => String(x.source).startsWith('591')) || {}).sourceId || null,
       // LINE 配對查詢用：主建物坪、車位型式、591 特色標籤
       ma: rep.mainArea ?? null, pt: (ms.find(x => x.carModel) || {}).carModel || null,
-      ft: [...new Set(ms.flatMap(x => x.features || []))] });
+      ft: fts });
 
     if (!hot) continue;
     // 同體系店家已有 → 不能開發，關鍵字再好也一樣；另列一份給人工抽查比對有沒有誤判
@@ -348,7 +370,7 @@ async function main() {
       ownerGone,
       parking: ms.some(x => x.hasCarport) ? 1 : ms.some(x => String(x.source).startsWith('591')) ? 0 : null,
       parkType: (ms.find(x => x.carModel) || {}).carModel || null,
-      features: [...new Set(ms.flatMap(x => x.features || []))],
+      features: fts,
       ll: commId ? commLL.get(String(commId)) || null : null,   // 社區座標（LINE 附近查詢、地圖）
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3

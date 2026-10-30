@@ -11,7 +11,7 @@ const STATE = process.env.RADAR_STATE || path.join(ROOT, 'state');
 const { RADAR_URL, INGEST_KEY } = process.env;
 if (!RADAR_URL || !INGEST_KEY) { console.error('缺 RADAR_URL 或 INGEST_KEY'); process.exit(1); }
 
-const STATE_FILES = ['tracker', 'yc-listings', 'community', 'market-prices', 'notify', 'peers', 'sold', 'roads'];
+const STATE_FILES = ['tracker', 'yc-listings', 'community', 'market-prices', 'notify', 'peers', 'sold', 'roads', 'desc591'];
 const url = name => `${RADAR_URL.replace(/\/$/, '')}/api/ingest/blob/${name}`;
 const H = { 'X-Ingest-Key': INGEST_KEY };
 
