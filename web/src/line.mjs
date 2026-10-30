@@ -706,11 +706,20 @@ export async function lineStatus(env) {
   };
 }
 
-export async function webhook(req, env) {
+export async function webhook(req, env, ctx) {
   const raw = await req.arrayBuffer();
   if (!env.LINE_SECRET || !(await verify(raw, req.headers.get('x-line-signature'), env.LINE_SECRET)))
     return new Response('bad signature', { status: 401 });
   const ev = JSON.parse(new TextDecoder().decode(raw)).events || [];
+  // 先回 LINE 200、查詢放背景跑（reply token 有效約 1 分鐘）
+  //   10/30：有結果的查詢要測各平台連結，整段約 2 秒，LINE 先斷線 → Worker 被取消（outcome canceled）、回覆送不出去（已讀不回）
+  const job = handle(env, ev).catch(e => console.log(`LINE 查詢失敗：${e.stack || e.message}`));
+  if (ctx?.waitUntil) { ctx.waitUntil(job); return new Response('ok'); }
+  await job;
+  return new Response('ok');
+}
+
+async function handle(env, ev) {
   const allow = new Set(String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean));
   for (const e of ev) {
     if (!e.replyToken) continue;
@@ -727,5 +736,4 @@ export async function webhook(req, env) {
     const out = await answer(env, uid, e.message.text);
     await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP));
   }
-  return new Response('ok');
 }

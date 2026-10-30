@@ -71,7 +71,7 @@ async function canAccessClient(env, user, clientId) {
 
 // ---------- 路由 ----------
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     const p = url.pathname;
     const m = req.method;
@@ -95,7 +95,7 @@ export default {
         return v ? new Response(v, { headers: { 'Content-Type': 'application/json; charset=utf-8' } }) : err('連結已失效', 404);
       }
       // LINE 官方帳號對話查詢（LINE 平台打過來，用 LINE_SECRET 驗簽）
-      if (p === '/api/line/webhook' && m === 'POST') return await lineWebhook(req, env);
+      if (p === '/api/line/webhook' && m === 'POST') return await lineWebhook(req, env, ctx);
       if (p.startsWith('/api/')) return await api(req, env, url, p, m);
       return env.ASSETS.fetch(req);
     } catch (e) {
