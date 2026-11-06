@@ -18,7 +18,20 @@ EV='{"events":[{"type":"message","replyToken":"r","source":{"userId":"Utest"},"m
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H 'x-line-signature: bad' -d "$EV")" = 401 ] && ok "錯簽章 401" || bad "錯簽章沒擋"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV")" -d "$EV")" = 200 ] && ok "正確簽章 200（查詢＋回覆）" || bad "正確簽章失敗"
 EV2='{"events":[{"type":"message","replyToken":"r","source":{"userId":"Ux"},"message":{"type":"text","text":"太平"}}]}'
-[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV2")" -d "$EV2")" = 200 ] && ok "名單外的人 200（只回 ID）" || bad "名單外"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV2")" -d "$EV2")" = 200 ] && ok "名單外的人 200（進待核准）" || bad "名單外"
+# 核准制（11/07）：名單外 → 待核准；管理者（LINE_ALLOW 第一位＝Utest）打「核准 1」→ 變成員；之後查詢有記錄
+sleep 1; curl -s -H 'X-Ingest-Key: k' "$B/api/ingest/line-status" >/dev/null
+post() { curl -s -o /dev/null -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$1")" -d "$1"; sleep 1; }
+d1() { npx wrangler d1 execute radar-db --local --persist-to $P --json --command "$1" 2>/dev/null; }
+d1 "SELECT v FROM blobs WHERE k='lm-pending'" | grep -q '"id\\":\\"Ux' && ok "名單外的人進待核准" || bad "待核准沒記到"
+post '{"events":[{"type":"message","replyToken":"r","source":{"userId":"Utest"},"message":{"type":"text","text":"核准 1"}}]}'
+d1 "SELECT v FROM blobs WHERE k='lm-members'" | grep -q '"id\\":\\"Ux' && ok "管理者核准 → 成員" || bad "核准沒成功"
+post '{"events":[{"type":"message","replyToken":"r","source":{"userId":"Ux"},"message":{"type":"text","text":"東區優質透天"}}]}'
+post '{"events":[{"type":"message","replyToken":"r","source":{"userId":"Ux"},"message":{"type":"text","text":"回報 想查學區"}}]}'
+U=$(curl -s -H 'X-Ingest-Key: k' "$B/api/ingest/line-usage?days=1")
+echo "$U" | grep -q '東區優質透天' && echo "$U" | grep -q '"r":"fb"' && ok "使用紀錄＋回報有記到" || bad "使用紀錄：$U"
+post '{"events":[{"type":"message","replyToken":"r","source":{"userId":"Ux"},"message":{"type":"text","text":"核准 1"}}]}'
+d1 "SELECT v FROM blobs WHERE k='lm-pending'" | grep -q 'Ux' && bad "朋友能用管理指令" || ok "朋友打管理指令不會生效"
 EV3='{"events":[{"type":"follow","replyToken":"r","source":{"userId":"Utest"}}]}'
 [ "$(curl -s -o /dev/null -w '%{http_code}' -X POST $B/api/line/webhook -H "x-line-signature: $(sig "$EV3")" -d "$EV3")" = 200 ] && ok "加好友 200（歡迎訊息＋範例按鈕）" || bad "加好友"
 # 假 token → LINE 應回 401；回 400 代表訊息格式錯（例如範例按鈕欄位不對）

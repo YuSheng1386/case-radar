@@ -4,7 +4,7 @@
 //   GitHub Actions：/api/ingest/*（帶 X-Ingest-Key）上傳案件資料與爬蟲狀態
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
-import { webhook as lineWebhook, pushWelcome, lineStatus } from './line.mjs';
+import { webhook as lineWebhook, pushWelcome, lineStatus, usage as lineUsage, adminMenu as lineAdminMenu } from './line.mjs';
 import { ingest as pushIngest, flush as pushFlush, CRON as PUSH_CRON } from './pushq.mjs';
 import { geocode } from './geo.mjs';
 import { store } from './store.mjs';
@@ -159,7 +159,17 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/push-welcome' && m === 'POST') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     const b = await body(req).catch(() => ({}));
-    return json(await pushWelcome(env, b?.broadcast ? 'broadcast' : b?.all ? null : 1));
+    return json(await pushWelcome(env, b?.broadcast ? 'broadcast' : b?.friends ? 'friends' : b?.all ? null : 1));
+  }
+  // 管理者專屬 LINE 選單（body＝PNG 2500×843）：本機 bash tools/admin-menu.sh
+  if (p === '/api/ingest/admin-menu' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    return json(await lineAdminMenu(env, await req.arrayBuffer()));
+  }
+  // LINE 使用紀錄（朋友怎麼問、查不到的、回報）：本機 bash tools/line-usage.sh [天數]
+  if (p === '/api/ingest/line-usage' && m === 'GET') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    return json(await lineUsage(env, Math.min(90, Number(url.searchParams.get('days')) || 7)));
   }
   if (p === '/api/ingest/line-status' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);

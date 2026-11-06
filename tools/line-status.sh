@@ -7,4 +7,5 @@ let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{const j=JSON.parse(s);
 console.log(`帳號：${j.bot}`);
 console.log(`本月推播：已用 ${j.used} / ${j.quota}，剩 ${typeof j.quota==="number"?j.quota-j.used:"不限"} 則（回覆不算）`);
 const f=j.followers;console.log(f.friends!=null?`好友：${f.friends} 人（${f.date} 統計，封鎖 ${f.blocks}）`:`好友數：LINE 統計還沒好（${JSON.stringify(f)}，隔天才有）`);
-console.log("查詢名單：");for(const a of j.allow)console.log(`  ${a.name}  ${a.id}${a.push?"（收推播）":""}`);})'
+console.log("查詢名單：");for(const a of j.allow)console.log(`  ${a.name}  ${a.id}${a.via?"・"+a.via:""}${a.push?"（收推播）":""}`);
+if(j.pending?.length){console.log("待核准（LINE 打「待核准」處理）：");for(const p of j.pending)console.log(`  ${p.name}  「${p.t}」 ${p.at}`);}})'

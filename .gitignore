@@ -11,3 +11,4 @@ web/.ingest-key
 backup/
 web/.backup-pass
 web/.ingest-key.new
+tools/friends-go.sh

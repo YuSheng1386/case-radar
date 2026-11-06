@@ -380,6 +380,42 @@ async function main() {
   }
   cards.sort((a, b) => b.score - a.score);
 
+  // ---- 5b. 591 連結抽查（11/07 用戶：LINE 查到的還是有過期的）----
+  //   快速更新只翻前幾頁，591 下架要等週日完整翻才判定 → 下架的刊登最多掛一週
+  //   分數 ≥ CHECK_SCORE 的案件：591 刊登 12 小時內沒在列表看到、也沒抽查過的，實際打開；404 → 追蹤標下架、這次輸出拿掉那個來源
+  //   全部來源都下架的案件這次就不列。被擋／逾時當作還在（跟 web/src/linkcheck.mjs 一樣，不誤殺）
+  const CHECK_SCORE = Number(process.env.RADAR_CHECK_SCORE) || 45, CHECK_MAX = Number(process.env.RADAR_CHECK_MAX) || (full ? 900 : 400);
+  const keyOf = s => { const m = /sale\.591\.com\.tw\/home\/house\/detail\/(?:2\/)?(\d+)\.html/.exec(s.url || ''); return m && String(s.s).startsWith('591') ? `${s.s}_${m[1]}` : null; };
+  const stale = r => !r.removedAt && Date.now() - Date.parse(r.last || 0) > 12 * 3600e3 && Date.now() - Date.parse(r.chk || 0) > 12 * 3600e3;
+  const todo = [];
+  for (const c of cards) if (c.score >= CHECK_SCORE) for (const s of c.sources) {
+    const k = keyOf(s), r = k && tracker.items[k];
+    if (r && stale(r) && s.gone == null) todo.push(k);
+  }
+  const checkList = [...new Set(todo)].slice(0, CHECK_MAX);
+  if (checkList.length) {
+    const { linkAlive } = await import('./web/src/linkcheck.mjs');
+    const dead = new Set();
+    const t0 = Date.now();
+    for (let i = 0; i < checkList.length; i += 8) {
+      await Promise.all(checkList.slice(i, i + 8).map(async k => {
+        const r = tracker.items[k];
+        if (await linkAlive(r.d.url, 8000)) r.chk = now;
+        else { r.removedAt = now; peers.watchRemoved(sold, k, r); dead.add(k); }
+      }));
+    }
+    let dropped = 0;
+    for (let i = cards.length - 1; i >= 0; i--) {
+      const c = cards[i];
+      const left = c.sources.filter(s => !dead.has(keyOf(s)));
+      if (left.length === c.sources.length) continue;
+      if (left.length) c.sources = left; else { cards.splice(i, 1); dropped++; }
+    }
+    if (dead.size) save(F.sold, sold);
+    runLog.linkcheck = { checked: checkList.length, dead: dead.size, dropped, waiting: todo.length - checkList.length, sec: Math.round((Date.now() - t0) / 1000) };
+    console.log(`[591 抽查] 打開 ${checkList.length} 筆（還有 ${runLog.linkcheck.waiting} 筆下次），下架 ${dead.size} 筆，整件拿掉 ${dropped} 件，${runLog.linkcheck.sec} 秒`);
+  }
+
   // ---- 6. 輸出 ----
   const storeCounts = Object.values(ycData.storeCounts || {});
   const out = {

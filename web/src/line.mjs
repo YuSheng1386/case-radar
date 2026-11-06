@@ -59,6 +59,7 @@ const WELCOME = `👋 歡迎使用案件雷達
 ・回「更多」看下一頁，每次都附地圖
 ・打「說明」看全部條件（價格、坪數、樓層、車位、屋主自售、降價…）
 ・不用打完整，「少於30年」「大於四房」「2000以下」都看得懂
+・查不到想要的、結果怪怪的 → 打「回報 ＋你想說的」，會照著改
 
 下面的按鈕點了就能試 👇`;
 // 範例按鈕（LINE quick reply，最多 13 個，標籤 20 字內）
@@ -480,7 +481,8 @@ async function reply(env, token, texts, quick = false) {
   const messages = list.map((t, i) => ({
     // 半個 emoji（索引切字切壞）會讓 LINE 整則拒收 → 先修成合法字串、超過 5000 字截掉
     type: 'text', text: Array.from(t.toWellFormed()).slice(0, 4900).join(''),
-    ...(quick && i === list.length - 1 ? { quickReply: { items: QUICK } } : {})
+    // quick：true＝範例按鈕；陣列＝自訂按鈕文字（管理者模式）
+    ...(quick && i === list.length - 1 ? { quickReply: { items: Array.isArray(quick) ? quick.map(qb) : QUICK } } : {})
   }));
   const text = list.join('\n');
   const r = await fetch('https://api.line.me/v2/bot/message/reply', {
@@ -527,6 +529,160 @@ export function matchLine(x) {
   const url = url591(x.u);
   const bits = [x.ar != null ? `${x.ar}坪` : '', x.fs, x.ly, x.ag != null ? `屋齡${x.ag}年` : '', x.pt ? `🚗${x.pt.replace(/式$/, '')}車位` : x.pk ? '🚗含車位' : ''].filter(Boolean);
   return `${x.sm ? '🔒同體系 ' : ''}・${x.p ?? '—'}萬｜${x._d} ${x.n || ''}\n  ${bits.join(' ')}${x.own === 2 ? '・只有屋主在賣' : x.own ? '・有屋主在賣' : ''}\n  ${url}`;
+}
+
+// ---------- 朋友自助開通＋使用紀錄（11/07：開兩位朋友直接用，看他們怎麼問來優化） ----------
+//   名單＝秘密值 LINE_ALLOW（管理者＝第一個）＋ D1 blobs `lm-members`（管理者核准的，[{id,name,at,push}]）
+//   核准制（用戶 11/07：比邀請碼安全）：名單外的人加好友／傳訊息 → 進待核准 `lm-pending`（LINE 名稱＋第一句話）
+//   → 管理者在 LINE 打「待核准」看清單、「核准 1」開通（也可「核准 U…」直接貼 userId）；不用再改秘密值、不花推播額度
+//   每次查詢記一筆 `lg-<時間>-<亂碼>`（90 天）：誰、問什麼、幾件／看不懂／找不到地點；「回報 …」記成意見
+//   看紀錄：bash tools/line-usage.sh [天數]
+const MEM = 'lm-members', PEND = 'lm-pending', LOG_DAYS = 90;
+export const envIds = env => String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
+export const getMembers = async S => (await S.get(MEM, 'json')) || [];
+// 推播對象：LINE_TO（沒設＝LINE_ALLOW）＋ 收推播的朋友
+//   11/07 用戶：4 人都一樣（每天 9 點＋85 分以上特急），額度規則在 pushq.mjs flush
+export async function pushIds(env) {
+  const base = String(env.LINE_TO || env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
+  const extra = (await getMembers(store(env))).filter(m => m.push).map(m => m.id);
+  return [...new Set([...base, ...extra])];
+}
+async function profileName(env, uid) {
+  try {
+    const r = await fetch(`https://api.line.me/v2/bot/profile/${uid}`, { headers: { Authorization: `Bearer ${env.LINE_TOKEN}` } });
+    return r.ok ? (await r.json()).displayName || '' : '';
+  } catch { return ''; }
+}
+async function logUse(S, rec) {
+  const k = `lg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  try { await S.put(k, JSON.stringify({ at: new Date().toISOString(), ...rec }), { expirationTtl: LOG_DAYS * 86400 }); }
+  catch (e) { console.log(`使用紀錄寫入失敗：${e.message}`); }
+}
+// 回覆內容 → 結果分類（不改 answerFor，從字面判斷）
+export function outcome(out) {
+  let m;
+  if (out === HELP) return 'help';
+  if (out === WELCOME) return 'welcome';
+  if (out.startsWith('看不懂')) return 'x';
+  if (out.startsWith('找不到「')) return 'geo';
+  if ((m = out.match(/\n共 (\d+) 件/))) return Number(m[1]);
+  if (/目前沒有符合/.test(out)) return 0;
+  return 'other';
+}
+const twNow = () => new Date(Date.now() + 8 * 3600e3).toISOString();
+const PEND_MAX = 30;   // 待核准最多留 30 人（陌生人亂加不會無限長）
+
+// 名單外的人傳訊息／加好友 → 記進待核准（同一人只記一次，更新最後一句）
+async function addPending(env, S, uid, text) {
+  const ps = (await S.get(PEND, 'json')) || [];
+  const p = ps.find(x => x.id === uid);
+  if (p) { if (text) p.t = text.slice(0, 60); p.last = twNow(); }
+  else ps.push({ id: uid, name: await profileName(env, uid), t: (text || '（加好友）').slice(0, 60), at: twNow() });
+  await S.put(PEND, JSON.stringify(ps.slice(-PEND_MAX)), { expirationTtl: 30 * 86400 });
+  return !p;
+}
+
+async function pushAdmin(env, to, text, btns = []) {
+  try {
+    const r = await fetch('https://api.line.me/v2/bot/message/push', {
+      method: 'POST', headers: { Authorization: `Bearer ${env.LINE_TOKEN}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ to, messages: [{ type: 'text', text: text.toWellFormed(), ...(btns.length ? { quickReply: { items: btns.map(qb) } } : {}) }] })
+    });
+    if (!r.ok) console.log(`通知管理者失敗 ${r.status} ${(await r.text()).slice(0, 200)}`);
+  } catch (e) { console.log(`通知管理者失敗 ${e.message}`); }
+}
+const qb = t => ({ type: 'action', action: { type: 'message', label: t.slice(0, 20), text: t } });
+const ADMIN_BTNS = ['待核准', '成員', '問題', '使用量', '說明'];
+
+// 朋友用起來的問題（看不懂、找不到地點、0 件、回報），最近 N 天；配對模式 0 件另外算（配對本來就常 0 件）
+async function problems(env, S, days = 7) {
+  const { logs } = await usage(env, days);
+  const ids = envIds(env);
+  const fr = logs.filter(x => x.u !== '管理者');
+  const bad = fr.filter(x => x.r === 'fb' || x.r === 'x' || x.r === 'geo' || x.r === 'other' || (x.r === 0 && !/^(配對|客戶|買方)/.test(x.t)));
+  const L = { fb: '📝回報', x: '❓看不懂', geo: '📍找不到地點', other: '⚠️其他', 0: '🈳0件' };
+  if (!fr.length) return `最近 ${days} 天朋友還沒有查詢`;
+  const m0 = fr.filter(x => x.r === 0 && /^(配對|客戶|買方)/.test(x.t)).length;
+  return `最近 ${days} 天朋友查了 ${fr.filter(x => typeof x.r === 'number').length} 次，有問題 ${bad.length} 次${m0 ? `（配對 0 件另有 ${m0} 次）` : ''}\n\n`
+    + (bad.slice(-15).map(x => `${x.at.slice(5, 10)} ${x.u}｜${L[x.r] || x.r}｜「${x.t.slice(0, 40)}」${x.last ? `（前一句：${x.last.slice(0, 20)}）` : ''}`).join('\n') || '沒有問題 👍')
+    + '\n\n完整紀錄：bash tools/line-usage.sh';
+}
+
+const ADMIN_HELP = `🛠 管理者模式（只有你的對話有）：
+・待核准：看誰申請（LINE 名稱＋他傳的第一句話）；有人申請會主動推給你，點按鈕就核准
+・核准 1／核准 1 2／核准 全部（也可以「核准 U…」直接貼 userId）
+・拒絕 1：從待核准拿掉
+・成員：看核准過的朋友、誰收推播
+・移除 1：取消某位朋友的權限
+・問題：朋友最近 7 天查不到／看不懂／找不到地點／回報的句子（「問題 30」看 30 天）；朋友打「回報」會主動推給你
+・使用量：每個人最近 7 天查幾次`;
+
+// 管理者指令（只有 LINE_ALLOW 第一位）
+async function adminCmd(env, S, t) {
+  let m;
+  if (/^(管理|管理指令|管理者|管理員|admin)$/i.test(t)) return { t: ADMIN_HELP, b: ADMIN_BTNS };
+  if ((m = t.match(/^(?:問題|狀況|回報清單)\s*(\d{1,2})?$/))) return { t: await problems(env, S, Number(m[1] || 7)), b: ADMIN_BTNS };
+  if (/^(使用量|用量|統計)$/.test(t)) {
+    const { logs } = await usage(env, 7);
+    const by = {};
+    for (const x of logs) if (typeof x.r === 'number') by[x.u] = (by[x.u] || 0) + 1;
+    return { t: '最近 7 天查詢次數：\n' + (Object.entries(by).sort((a, b) => b[1] - a[1]).map(([u, n]) => `・${u}：${n} 次`).join('\n') || '（還沒有）'), b: ADMIN_BTNS };
+  }
+  if (/^(待核准|申請|待審|待開通)$/.test(t)) {
+    const ps = (await S.get(PEND, 'json')) || [];
+    if (!ps.length) return '目前沒有人申請\n（朋友加好友後傳任何一句話，就會出現在這裡）';
+    return '待核准：\n' + ps.map((x, i) => `${i + 1}. ${x.name || '（查不到名稱）'}　${x.at.slice(5, 16).replace('T', ' ')}\n　說：「${x.t}」　ID …${x.id.slice(-6)}`).join('\n')
+      + '\n\n「核准 1」開通，「拒絕 1」拿掉';
+  }
+  if ((m = t.match(/^(核准|同意|開通|拒絕|駁回)\s*(.+)$/))) {
+    const ok = /^(核准|同意|開通)$/.test(m[1]);
+    const ps = (await S.get(PEND, 'json')) || [], ms = await getMembers(S);
+    const arg = m[2].trim();
+    let pick;
+    if (/^全部$/.test(arg)) pick = ps.slice();
+    else if (/^U[0-9a-f]{32}$/i.test(arg)) pick = [ps.find(x => x.id === arg) || { id: arg, name: '' }];
+    else {
+      const ns = arg.split(/[\s,，、]+/).map(Number);
+      if (ns.some(n => !Number.isInteger(n) || !ps[n - 1])) return '號碼不對，先打「待核准」看清單';
+      pick = [...new Set(ns)].map(n => ps[n - 1]);
+    }
+    if (!pick.length) return '目前沒有人申請';
+    const rest = ps.filter(x => !pick.some(p => p.id === x.id));
+    if (ok) for (const p of pick) {
+      if (envIds(env).includes(p.id) || ms.some(x => x.id === p.id)) continue;
+      ms.push({ id: p.id, name: p.name || await profileName(env, p.id), at: twNow(), push: false });
+    }
+    await Promise.all([ok ? S.put(MEM, JSON.stringify(ms)) : null, S.put(PEND, JSON.stringify(rest), { expirationTtl: 30 * 86400 })]);
+    const who = pick.map(p => p.name || `…${p.id.slice(-6)}`).join('、');
+    if (ok) for (const p of pick) await logUse(S, { u: p.id, n: p.name, t: '（核准開通）', r: 'join' });
+    return ok ? `✅ 已開通：${who}\n他下次傳訊息就能直接查（不會主動通知他，可以跟他說一聲）` : `已拒絕：${who}`;
+  }
+  if (/^(成員|名單|使用者)$/.test(t)) {
+    const ms = await getMembers(S);
+    if (!ms.length) return '還沒有核准過的朋友（打「待核准」看申請）';
+    // 腳本直接加進來的沒有名稱 → 補查一次
+    if (ms.some(x => !x.name)) { for (const x of ms) if (!x.name) x.name = await profileName(env, x.id); await S.put(MEM, JSON.stringify(ms)); }
+    return '核准過的朋友：\n' + ms.map((x, i) => `${i + 1}. ${x.name || '（沒名字）'}　${x.at.slice(5, 10)} 開通${x.push ? '・收推播' : ''}`).join('\n')
+      + '\n\n取消權限：「移除 2」（照上面的號碼）';
+  }
+  if ((m = t.match(/^(?:移除|刪除)\s*(\d{1,2})$/))) {
+    const ms = await getMembers(S), i = Number(m[1]) - 1;
+    if (!ms[i]) return '沒有這個號碼，打「成員」看名單';
+    const [x] = ms.splice(i, 1);
+    await S.put(MEM, JSON.stringify(ms));
+    return `已移除 ${x.name || x.id.slice(0, 6)}（他之後傳訊息會回到待核准）`;
+  }
+  return null;
+}
+
+// 使用紀錄（bash tools/line-usage.sh）：最近 N 天，名字對照名單
+export async function usage(env, days = 7) {
+  const since = Math.floor(Date.now() / 1000) + LOG_DAYS * 86400 - days * 86400;
+  const rs = (await env.DB.prepare("SELECT v FROM blobs WHERE k LIKE 'lg-%' AND exp >= ? ORDER BY k").bind(since).all()).results;
+  const S = store(env), ms = await getMembers(S), ids = envIds(env);
+  const names = Object.fromEntries(ms.map(x => [x.id, x.name]));
+  const who = id => names[id] || (ids.indexOf(id) === 0 ? '管理者' : ids.includes(id) ? `名單${ids.indexOf(id) + 1}` : id.slice(0, 6));
+  return { days, members: ms.map(x => ({ name: x.name, at: x.at, push: x.push })), logs: rs.map(r => { const j = JSON.parse(r.v); return { ...j, u: who(j.u) }; }) };
 }
 
 const answer = (env, uid, text) => answerFor(store(env), uid, text);
@@ -674,7 +830,9 @@ export async function pushWelcome(env, n = 1) {
     });
     return r.ok ? { ok: true, sent: 'broadcast' } : { ok: false, errors: [`${r.status} ${(await r.text()).slice(0, 200)}`] };
   }
-  const ids = String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean).slice(0, n ?? undefined);
+  // n＝'friends'：只推核准的朋友（lm-members）
+  const mem = (await getMembers(store(env))).map(x => x.id);
+  const ids = n === 'friends' ? mem : [...new Set([...envIds(env), ...mem])].slice(0, n ?? undefined);
   if (!ids.length) return { ok: false, error: '查詢名單 LINE_ALLOW 是空的' };
   const out = [];
   for (const to of ids) {
@@ -694,16 +852,44 @@ export async function lineStatus(env) {
   const get = async u => { const r = await fetch(`https://api.line.me${u}`, { headers: H }); return r.ok ? r.json() : { error: r.status }; };
   const tw = new Date(Date.now() + 8 * 3600e3 - 864e5);   // 昨天（台灣日期）
   const ymd = `${tw.getUTCFullYear()}${String(tw.getUTCMonth() + 1).padStart(2, '0')}${String(tw.getUTCDate()).padStart(2, '0')}`;
-  const ids = String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean);
-  // 推播對象跟 pushq.mjs 一樣：有設 LINE_TO 用它，沒設就是查詢名單全部
-  const pushTo = new Set(String(env.LINE_TO || env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean));
+  const S = store(env), mem = await getMembers(S);
+  const ids = [...new Set([...envIds(env), ...mem.map(x => x.id)])];
+  // 推播對象跟 pushq.mjs 一樣
+  const pushTo = new Set(await pushIds(env));
+  const pend = (await S.get(PEND, 'json')) || [];
   const [quota, used, fol, bot, ...profiles] = await Promise.all([get('/v2/bot/message/quota'), get('/v2/bot/message/quota/consumption'),
     get(`/v2/bot/insight/followers?date=${ymd}`), get('/v2/bot/info'), ...ids.map(id => get(`/v2/bot/profile/${id}`))]);
   return {
     bot: bot.displayName, quota: quota.type === 'limited' ? quota.value : quota.type, used: used.totalUsage,
     followers: fol.status === 'ready' ? { date: ymd, friends: fol.followers, targeted: fol.targetedReaches, blocks: fol.blocks } : fol,
-    allow: ids.map((id, i) => ({ id: id.slice(0, 5) + '…' + id.slice(-4), name: profiles[i].displayName || `（查不到：${profiles[i].error}，可能沒加好友）`, push: pushTo.has(id) }))
+    allow: ids.map((id, i) => ({ id: id.slice(0, 5) + '…' + id.slice(-4), name: profiles[i].displayName || `（查不到：${profiles[i].error}，可能沒加好友）`, push: pushTo.has(id), via: envIds(env).includes(id) ? 'secret' : '核准' })),
+    pending: pend.map(x => ({ name: x.name, t: x.t, at: x.at }))
   };
+}
+
+// 管理者專屬選單（LINE rich menu 只綁在管理者自己的對話，朋友看不到）：底下一排按鈕 待核准／問題／成員／管理
+//   bash tools/admin-menu.sh（本機畫好圖 → POST /api/ingest/admin-menu → 這裡建選單、傳圖、綁給 LINE_ALLOW 第一位）
+export async function adminMenu(env, png) {
+  const to = envIds(env)[0];
+  if (!to) return { ok: false, error: 'LINE_ALLOW 是空的' };
+  const H = { Authorization: `Bearer ${env.LINE_TOKEN}` };
+  const labels = ['待核准', '問題', '成員', '管理'], W = 2500, Hh = 843, w = W / labels.length;
+  const r1 = await fetch('https://api.line.me/v2/bot/richmenu', {
+    method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ size: { width: W, height: Hh }, selected: true, name: '案件雷達管理者', chatBarText: '🛠 管理',
+      areas: labels.map((t, i) => ({ bounds: { x: Math.round(i * w), y: 0, width: Math.round(w), height: Hh }, action: { type: 'message', text: t } })) })
+  });
+  if (!r1.ok) return { ok: false, step: '建選單', error: `${r1.status} ${(await r1.text()).slice(0, 200)}` };
+  const { richMenuId } = await r1.json();
+  const r2 = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, { method: 'POST', headers: { ...H, 'Content-Type': 'image/png' }, body: png });
+  if (!r2.ok) return { ok: false, step: '傳圖', error: `${r2.status} ${(await r2.text()).slice(0, 200)}` };
+  const r3 = await fetch(`https://api.line.me/v2/bot/user/${to}/richmenu/${richMenuId}`, { method: 'POST', headers: H });
+  if (!r3.ok) return { ok: false, step: '綁定', error: `${r3.status} ${(await r3.text()).slice(0, 200)}` };
+  // 舊的管理選單刪掉（同名、不是這次的）
+  const list = await fetch('https://api.line.me/v2/bot/richmenu/list', { headers: H }).then(r => r.json()).catch(() => ({ richmenus: [] }));
+  for (const m of list.richmenus || []) if (m.name === '案件雷達管理者' && m.richMenuId !== richMenuId)
+    await fetch(`https://api.line.me/v2/bot/richmenu/${m.richMenuId}`, { method: 'DELETE', headers: H });
+  return { ok: true, richMenuId };
 }
 
 export async function webhook(req, env, ctx) {
@@ -720,20 +906,60 @@ export async function webhook(req, env, ctx) {
 }
 
 async function handle(env, ev) {
-  const allow = new Set(String(env.LINE_ALLOW || '').split(',').map(s => s.trim()).filter(Boolean));
+  const S = store(env);
+  const ids = envIds(env);
+  let mem = null;
   for (const e of ev) {
     if (!e.replyToken) continue;
     const uid = e.source?.userId || '';
-    if (!allow.has(uid)) {
-      // 還沒開權限：回對方的 ID，讓管理者加進 LINE_ALLOW（tools/setup-line.sh）
-      const id = `🔑 你的 LINE ID：\n${uid}\n\n還沒開通查詢 → 把這串傳給管理者，加進名單後就能用`;
+    mem = mem || await getMembers(S);
+    const me = mem.find(x => x.id === uid);
+    if (!ids.includes(uid) && !me) {
+      // 還沒開權限：記進待核准，管理者在 LINE 打「待核准」→「核准 1」（也可照舊加進 LINE_ALLOW）
+      if (e.type !== 'follow' && e.type !== 'message') continue;
+      const text = e.type === 'message' && e.message?.type === 'text' ? e.message.text.trim() : '';
+      const first = await addPending(env, S, uid, text);
+      // 新申請 → 推給管理者（附「核准／拒絕」按鈕，點了就是在管理者自己的對話打指令；每位申請者只推一次＝1 則額度）
+      if (first && ids[0]) {
+        const ps = (await S.get(PEND, 'json')) || [], i = ps.findIndex(x => x.id === uid) + 1, p = ps[i - 1];
+        await pushAdmin(env, ids[0], `🙋 有人申請用案件雷達\n${p?.name || '（查不到名稱）'}：「${p?.t || ''}」\nID 末 6 碼 ${uid.slice(-6)}`,
+          [`核准 ${i}`, `拒絕 ${i}`, '待核准']);
+      }
+      const id = `🔑 已送出使用申請，管理者核准後就能直接查\n（核准後再傳一次訊息試試；你的 ID 末 6 碼：${uid.slice(-6)}）`;
       if (e.type === 'follow') await reply(env, e.replyToken, [WELCOME.replace(/\n下面的按鈕.*$/, ''), id]);
-      else if (e.type === 'message') await reply(env, e.replyToken, id);
+      else await reply(env, e.replyToken, first ? id : '還在等管理者核准，核准後再傳一次訊息就能用');
       continue;
     }
     if (e.type === 'follow') { await reply(env, e.replyToken, WELCOME, true); continue; }
     if (e.type !== 'message' || e.message?.type !== 'text') continue;
-    const out = await answer(env, uid, e.message.text);
+    const t = e.message.text.trim();
+    const name = me?.name || (ids.indexOf(uid) === 0 ? '管理者' : '');
+    // 管理者：邀請碼／成員／移除
+    if (uid === ids[0]) {
+      const a = await adminCmd(env, S, t);
+      if (a) { a.t ? await reply(env, e.replyToken, a.t, a.b) : await reply(env, e.replyToken, a, ['待核准', '成員', '問題', '管理']); continue; }
+    }
+    // 意見回報（連同上一次問的句子一起記）
+    let m;
+    if ((m = t.match(/^(?:回報|建議|意見|反應|bug)[\s:：]*([\s\S]+)$/i))) {
+      const last = await S.get(`lq-${uid}`, 'json');
+      await logUse(S, { u: uid, n: name, t: m[1].slice(0, 500), r: 'fb', last: last?.text || '' });
+      await reply(env, e.replyToken, '收到，謝謝！會照這個調整 🙏');
+      // 朋友的回報馬上推給管理者（管理者自己回報不推）
+      if (uid !== ids[0] && ids[0]) await pushAdmin(env, ids[0], `📝 ${name || '朋友'} 回報：\n${m[1].slice(0, 300)}${last?.text ? `\n（上一次問：「${last.text}」）` : ''}`, ['問題']);
+      continue;
+    }
+    // 朋友自己開關新案推播（每多一人每次推播多用 1 則額度；額度不夠時網站會自動少推）
+    if (me && /^(訂閱推播|開推播|推播開|收推播|取消推播|關推播|推播關|不要推播)$/.test(t)) {
+      const on = /^(訂閱推播|開推播|推播開|收推播)$/.test(t);
+      me.push = on;
+      await S.put(MEM, JSON.stringify(mem));
+      await reply(env, e.replyToken, on ? '✅ 之後每天早上 9 點會推給你今天的開發清單（85 分以上的特急件白天會即時推）\n其他時間隨時打「新上架」查；不要了打「取消推播」' : '已關掉新案推播，查詢照常可以用');
+      continue;
+    }
+    const t0 = Date.now();
+    const out = await answer(env, uid, t);
     await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP));
+    await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: outcome(out), ms: Date.now() - t0 });
   }
 }
