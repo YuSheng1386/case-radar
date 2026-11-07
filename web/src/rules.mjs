@@ -92,9 +92,10 @@ export function rulesFor(t) {
 
 // 朋友用的對話選單（LINE 預設 rich menu，所有好友都看得到；管理者綁了自己的管理選單會蓋掉這個）
 //   圖：public/menu-friends.png（tools/friends-menu.py 畫，2500×1686，3×2 格）
+//   selected:true＝打開聊天室就展開（用戶 11/07：選單要常駐）；使用者自己收起來後點底下那條就再打開
 //   版本號改了，Worker 收到下一則 LINE 訊息或 9 點定時時就自己重裝（不用跑腳本、不用金鑰）
 export const MENU = {
-  ver: '2026-11-07a', name: '案件雷達使用規則', bar: '📖 使用規則',
+  ver: '2026-11-07b', name: '案件雷達使用規則', bar: '📖 使用規則',
   cells: [
     { type: 'uri', uri: GUIDE_URL }, { type: 'message', text: '開發規則' }, { type: 'message', text: '配對規則' },
     { type: 'message', text: '同公司' }, { type: 'message', text: '推播規則' }, { type: 'message', text: '今天的案件' }
@@ -107,7 +108,7 @@ export async function ensureFriendMenu(env, S) {
   const W = 2500, Hh = 1686, w = W / 3, h = Hh / 2;
   const r1 = await fetch('https://api.line.me/v2/bot/richmenu', {
     method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ size: { width: W, height: Hh }, selected: false, name: MENU.name, chatBarText: MENU.bar,
+    body: JSON.stringify({ size: { width: W, height: Hh }, selected: true, name: MENU.name, chatBarText: MENU.bar,
       areas: MENU.cells.map((a, i) => ({ bounds: { x: Math.round((i % 3) * w), y: Math.round(Math.floor(i / 3) * h), width: Math.round(w), height: Math.round(h) },
         action: a.type === 'uri' ? { type: 'uri', uri: a.uri } : { type: 'message', text: a.text } })) })
   });
