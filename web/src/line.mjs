@@ -962,7 +962,7 @@ async function handle(env, ev) {
       const on = /^(訂閱推播|開推播|推播開|收推播)$/.test(t);
       me.push = on;
       await S.put(MEM, JSON.stringify(mem));
-      await reply(env, e.replyToken, on ? '✅ 之後每天早上 9 點會推給你今天的開發清單（85 分以上的特急件白天會即時推）\n其他時間隨時打「新上架」查；不要了打「取消推播」' : '已關掉新案推播，查詢照常可以用');
+      await reply(env, e.replyToken, on ? '✅ 之後每天早上 9 點會推給你當天的開發清單\n其他時間點選單「今天的案件」或打字自己查；不要了打「取消推播」' : '已關掉新案推播，查詢照常可以用');
       continue;
     }
     // 使用規則（11/07）：選單按鈕／打「規則」「開發規則」「配對規則」「同公司」「推播規則」
