@@ -108,6 +108,14 @@ export function invented(q, src) {
   if (/\d房/.test(q) && !/房|[一二三四五六七八九\d]\s*[房防]/.test(src)) out.push(q.match(/\d房\S*/)[0]);
   // 「便宜」→ 自己編總價（11/07 模擬：「東區便宜的老公寓」→「1500萬以下」）
   if (/\d+萬/.test(q) && !/\d|[一二三四五六七八九十百千]+萬|預算/.test(src)) out.push(q.match(/\S*\d+萬\S*/)[0]);
+  // 數字被改掉（11/07 雅鈞：「透天別墅15年內」→ AI 改成「10年內」）：原句有寫數字的，改寫裡的年／坪／萬／樓數字要原句也有
+  //   新一點→10年內、大坪數→40坪以上這種原句沒數字的不算
+  const nums = new Set((src.match(/\d+/g) || []));
+  for (const [, n, u] of q.matchAll(/(\d+)\s*(年|坪|萬|樓)/g))
+    if (/\d/.test(src) && !nums.has(n) && !(u === '萬' && [...nums].some(x => +x * 1000 === +n || +x * 10000 === +n)) && new RegExp(`\\d+\\s*${u}`).test(src)) out.push(`${n}${u}`);
+  // 反過來：原句寫了數字條件（15年內、30坪、2000萬），改寫裡不見了也不行
+  const qn = new Set(q.match(/\d+/g) || []);
+  for (const [w, n] of src.matchAll(/(\d+)\s*(?:年|坪)/g)) if (!qn.has(n)) out.push(`漏了${w}`);
   return out;
 }
 
@@ -164,7 +172,7 @@ export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, hel
     const added = invented(q, t + ' ' + (last?.text || ''));
     if (added.length) {
       if (round === 1) { a = null; break; }
-      a = await callAI(env, help, `${user}\n\n你上次改寫成「${q}」，但加了使用者沒說的「${added.join('、')}」。拿掉這些，再輸出一次 JSON。`);
+      a = await callAI(env, help, `${user}\n\n你上次改寫成「${q}」，有問題：${added.map(x => x.startsWith('漏了') ? `${x}（要保留）` : `加了使用者沒說的「${x}」（拿掉）`).join('、')}。再輸出一次 JSON。`);
       continue;
     }
     const out2 = await answerFor(S, uid, q);
