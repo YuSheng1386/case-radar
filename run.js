@@ -177,7 +177,10 @@ async function main() {
   // ---- 3. 同體系店家清單（full 才更新）----
   let ycData = load(F.ycList, { at: null, listings: [], storeCounts: {} });
   // 清單是空的或超過 36 小時沒更新 → 快速更新也重抓（11/07：11/05 被空清單蓋掉後，等凌晨完整更新才會修好，白天配對都沒有🔒）
-  const ycStale = !(ycData.listings || []).length || !ycData.at || Date.now() - Date.parse(ycData.at) > 36 * 3600e3;
+  //   名單有店還沒抓過（11/07 從 7 家加到 10 家）也重抓，不用等凌晨
+  const ycHave = new Set(Object.keys(ycData.storeCounts || {}));
+  const ycStale = !(ycData.listings || []).length || !ycData.at || Date.now() - Date.parse(ycData.at) > 36 * 3600e3 ||
+    cfg.excludedStores.some(s => s.phone && !ycHave.has(s.phone));
   if ((full || ycStale) && cfg.excludedStores.length) {
     try {
       const r = await yc.scrapeStores(cfg.excludedStores);
