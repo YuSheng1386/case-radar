@@ -176,7 +176,9 @@ async function main() {
 
   // ---- 3. 同體系店家清單（full 才更新）----
   let ycData = load(F.ycList, { at: null, listings: [], storeCounts: {} });
-  if (full && cfg.excludedStores.length) {
+  // 清單是空的或超過 36 小時沒更新 → 快速更新也重抓（11/07：11/05 被空清單蓋掉後，等凌晨完整更新才會修好，白天配對都沒有🔒）
+  const ycStale = !(ycData.listings || []).length || !ycData.at || Date.now() - Date.parse(ycData.at) > 36 * 3600e3;
+  if ((full || ycStale) && cfg.excludedStores.length) {
     try {
       const r = await yc.scrapeStores(cfg.excludedStores);
       // 11/05 店家頁改版時抓到 0 筆、把舊清單蓋成空的 → 同體系全部失效；0 筆一律不覆蓋
@@ -286,16 +288,41 @@ async function main() {
   //   11/07 用戶：除了店名電話，也從經紀業名、經紀業號篩。地址比對（matchSameSystem）沒中的靠這個補
   const brokerIdx = broker.buildIndex(cfg.excludedStores);
   const learned = broker.learnLicenses([...live591].map(id => desc591.brokerOf(descSt, id)).filter(Boolean), brokerIdx);
+  const ourHit = x => String(x.source).startsWith('591') ? broker.match(desc591.brokerOf(descSt, String(x.sourceId)), brokerIdx) : null;
   const brokerMatch = ms => {
     for (const x of ms) {
-      if (!String(x.source).startsWith('591')) continue;
-      const h = broker.match(desc591.brokerOf(descSt, String(x.sourceId)), brokerIdx);
+      const h = ourHit(x);
       // 網站／LINE 看得到 why → 只寫依據類別（分店／經紀業／證號／電話），不寫店家電話、公司名
       if (h) return { level: '高', storeCount: 1, stores: [h.store], url: x.url, by: h.by.split(/[：\s]/)[0] };
     }
     return null;
   };
-  let brokerHits = 0;
+  let brokerHits = 0, crossHits = 0;
+
+  // ① 併錯防護：我們店刊的那筆，跟同組其他刊登「看得出不是同一戶」（坪／樓層／社區對不上）→ 拆出來自成一件
+  //   去重只跟每組第一筆比，第一筆欄位缺時可能把兩戶併在一起；拆開後只擋我們那戶，另一戶照常可開發
+  let splitN = 0;
+  for (const g of groups.slice()) {
+    if (g.members.length < 2) continue;
+    for (const x of g.members.slice()) {
+      if (!ourHit(x)) continue;
+      if (!g.members.some(o => o !== x && core.unitConflict(x, o))) continue;
+      g.members.splice(g.members.indexOf(x), 1);
+      groups.push({ members: [x] });
+      splitN++;
+    }
+  }
+
+  // ② 沒併到的防護：我們店在 591 刊的每一筆，當成「店家物件」再跟所有案子比一次（同 matchSameSystem 規則）
+  //   同一戶在信義／住商的地址、坪數寫法不同、去重沒併到 → 那件也會被擋（理由寫「跨平台同一戶」）
+  const ours591 = [];
+  for (const g of groups) for (const x of g.members) {
+    const h = ourHit(x);
+    if (h) ours591.push({ id: `591-${x.sourceId}`, address: x.address, district: x.district, community: x.community,
+      price: x.price, area: x.area, floor: core.parseFloor(x.floor), stores: [h.store], url: x.url });
+  }
+  const ours591Idx = core.buildStoreIndex(ours591);
+  console.log(`[同體系] 我們店在 591 的刊登 ${ours591.length} 筆；跟別戶併錯拆開 ${splitN} 筆`);
 
   const cards = [];
   const blocked = [];
@@ -358,6 +385,10 @@ async function main() {
     // 網站上有人標「比對錯了」→ 不算同體系，改回可開發
     let m = core.matchSameSystem(rep, storeIdx);
     if (!m) { m = brokerMatch(ms); if (m) { brokerHits++; why.push(`同體系店家自己刊的（${m.by}）`); } }
+    if (!m) {
+      m = core.matchSameSystem(rep, ours591Idx);
+      if (m) { m.by = '跨平台同一戶'; crossHits++; why.push(`跟同體系店家在 591 刊的是同一戶（可信度${m.level}）`); }
+    }
     if (m && overrides.has(id)) { m = null; why.push('同體系比對經人工確認不是同一戶'); }
 
     // 案件池（給客需配對）：所有在架物件，精簡欄位（全部下架的不推給客人）
@@ -454,7 +485,7 @@ async function main() {
   save(path.join(ROOT, 'docs', 'pool.json'), { generatedAt: now, districts: cfg.districts, items: pool });
   tracker.runs = [runLog, ...(tracker.runs || [])].slice(0, 50);
   save(F.tracker, tracker);
-  console.log(`[同體系] 經紀業資訊多認出 ${brokerHits} 件（從刊登學到證號 ${learned} 個）`);
+  console.log(`[同體系] 經紀業資訊多認出 ${brokerHits} 件、跨平台同一戶 ${crossHits} 件（從刊登學到證號 ${learned} 個）`);
   console.log(`完成：在架 ${active.length} → 去重 ${groups.length} → 有競爭力可開發 ${cards.length}（同體系已有、排除 ${blocked.length}）`);
 
   // 全部來源都失敗才讓排程標紅
