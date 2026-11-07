@@ -18,6 +18,10 @@ database_id = "000e10e8-eb72-4107-b0db-49c48cff0809"
 binding = "BLOBS"
 id = "fc5452382a434781bd34f14903e5c99a"
 
+# LINE 智能客服（web/src/ai.mjs）：Workers AI，免費方案每天 1 萬 neurons，用完當天停用、不收費、不用金鑰
+[ai]
+binding = "AI"
+
 # 定時觸發（UTC）：LINE 新案推播台灣 09:00 推整晚累積的、20:00 收尾（web/src/pushq.mjs CRON）
 [triggers]
 crons = ["0 1 * * *", "0 12 * * *"]

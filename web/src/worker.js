@@ -4,7 +4,7 @@
 //   GitHub Actions：/api/ingest/*（帶 X-Ingest-Key）上傳案件資料與爬蟲狀態
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
-import { webhook as lineWebhook, pushWelcome, lineStatus, usage as lineUsage, adminMenu as lineAdminMenu, ensureFriendMenu } from './line.mjs';
+import { webhook as lineWebhook, pushWelcome, lineStatus, usage as lineUsage, adminMenu as lineAdminMenu, ensureFriendMenu, respond as lineRespond } from './line.mjs';
 import { ingest as pushIngest, flush as pushFlush, CRON as PUSH_CRON } from './pushq.mjs';
 import { geocode } from './geo.mjs';
 import { store } from './store.mjs';
@@ -171,6 +171,14 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/line-usage' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     return json(await lineUsage(env, Math.min(90, Number(url.searchParams.get('days')) || 7)));
+  }
+  // LINE 智能客服測試（不經 LINE、不回覆）：本機 bash tools/line-ai.sh "句子"；用固定測試 ID，不算任何朋友的 AI 次數
+  if (p === '/api/ingest/line-ai' && m === 'POST') {
+    if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
+    const b = await body(req);
+    const t0 = Date.now();
+    const a = await lineRespond(env, store(env), 'Xai-test', String(b.text || '').trim());
+    return json({ ...a, ms: Date.now() - t0 });
   }
   if (p === '/api/ingest/line-status' && m === 'GET') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);

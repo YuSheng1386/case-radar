@@ -9,7 +9,8 @@
 import { findPlace, km } from './geo.mjs';
 import { store } from './store.mjs';
 import { pickAlive, deadNote, caseToken, CASE_TTL } from './linkcheck.mjs';
-import { rulesFor, RULE_BTNS, ensureMenus, answerQuestion, SHORT_HELP } from './rules.mjs';
+import { rulesFor, RULE_BTNS, ensureMenus, answerQuestion, SHORT_HELP, KNOW } from './rules.mjs';
+import { aiAssist } from './ai.mjs';
 // 對話選單（朋友＝使用規則；管理者＝管理＋使用規則合併），名字沿用 worker.js 的 import
 export const ensureFriendMenu = (env, S) => ensureMenus(env, S, envIds(env)[0]);
 
@@ -616,8 +617,8 @@ async function problems(env, S, days = 7) {
   const { logs } = await usage(env, days);
   const ids = envIds(env);
   const fr = logs.filter(x => x.u !== '管理者');
-  const bad = fr.filter(x => x.r === 'fb' || x.r === 'x' || x.r === 'geo' || x.r === 'other' || (x.r === 0 && !/^(配對|客戶|買方)/.test(x.t)));
-  const L = { fb: '📝回報', x: '❓看不懂', geo: '📍找不到地點', other: '⚠️其他', 0: '🈳0件' };
+  const bad = fr.filter(x => x.r === 'fb' || x.r === 'x' || x.r === 'geo' || x.r === 'other' || x.r === 'ai-x' || (x.r === 0 && !/^(配對|客戶|買方)/.test(x.t)));
+  const L = { fb: '📝回報', x: '❓看不懂', geo: '📍找不到地點', other: '⚠️其他', 'ai-x': '🤖AI答不了', 0: '🈳0件' };
   if (!fr.length) return `最近 ${days} 天朋友還沒有查詢`;
   const m0 = fr.filter(x => x.r === 0 && /^(配對|客戶|買方)/.test(x.t)).length;
   return `最近 ${days} 天朋友查了 ${fr.filter(x => typeof x.r === 'number').length} 次，有問題 ${bad.length} 次${m0 ? `（配對 0 件另有 ${m0} 次）` : ''}\n\n`
@@ -992,9 +993,32 @@ async function handle(env, ev) {
     const ru = rulesFor(t);
     if (ru) { await reply(env, e.replyToken, ru, RULE_BTNS); await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: 'rule', ms: 0 }); continue; }
     const t0 = Date.now();
-    // 選單「今天的案件」＝查「新上架」（回覆不花推播額度）
-    const out = await answer(env, uid, /^(今天的案件|今天案件|今日案件|今天的開發清單)$/.test(t) ? '新上架' : t);
-    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP) || out.startsWith('看不懂'));
-    await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: outcome(out), ms: Date.now() - t0 });
+    const { out, r, ai, model } = await respond(env, S, uid, t);
+    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP) || out.startsWith('看不懂') || r === 'ai-x');
+    await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r, ms: Date.now() - t0, ...(ai ? { ai } : {}), ...(model ? { m: model } : {}) });
   }
+}
+
+// 一句話 → 回覆：規則先查；規則答不好（看不懂／找不到地點／0 件／只回說明或整份規則）→ AI 客服（web/src/ai.mjs）
+//   /api/ingest/line-ai 也走這裡（本機 bash tools/line-ai.sh 測正式 AI，不經 LINE）
+const CMD = /^(說明|help|\?|？|怎麼用|指令|用法|全部條件|你好|您好|嗨|hi|hello|哈囉|開始|教學|使用說明|範例|例子|更多|下一頁|more|下頁|繼續)[!！。]?$/i;
+const RULE_TEXT = new Set(Object.values(KNOW));
+export async function respond(env, S, uid, t) {
+  // 上一次查詢要先讀（answerFor 查到結果會覆寫 lq-）
+  const last = env.AI ? await S.get(`lq-${uid}`, 'json') : null;
+  // 選單「今天的案件」＝查「新上架」（回覆不花推播額度）
+  const out = await answerFor(S, uid, /^(今天的案件|今天案件|今日案件|今天的開發清單)$/.test(t) ? '新上架' : t);
+  const r = outcome(out);
+  // 問句被規則拿掉看不懂的字硬查（「今天天氣如何」→ 拿掉「天氣如何」列新上架）也交給 AI
+  const dropped = /先拿掉「/.test(out) && /嗎|呢|如何|怎麼|為什麼|什麼|多少|幾|？|\?/.test(t);
+  // 接續上一句（「那大里呢」「改成透天」）：規則只看這一句會把前面的條件丟掉 → AI 合併上一次查詢
+  const follow = /^(那|改成|換成|改看|如果是|換)/.test(t) && t.length <= 20 && !/^那些/.test(t);
+  const weak = r === 'x' || r === 'geo' || r === 0 || dropped || follow || ((out === HELP || RULE_TEXT.has(out)) && !CMD.test(t));
+  if (weak && t.length >= 2) {
+    try {
+      const a = await aiAssist(env, S, uid, t, out, r, { answerFor, outcome, help: HELP, last });
+      if (a) return a;
+    } catch (e) { console.log(`[AI] 失敗：${e.stack || e.message}`); }
+  }
+  return { out, r };
 }
