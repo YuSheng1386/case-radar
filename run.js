@@ -178,6 +178,8 @@ async function main() {
   if (full && cfg.excludedStores.length) {
     try {
       const r = await yc.scrapeStores(cfg.excludedStores);
+      // 11/05 店家頁改版時抓到 0 筆、把舊清單蓋成空的 → 同體系全部失效；0 筆一律不覆蓋
+      if (!r.listings.length) throw new Error(`${cfg.excludedStores.length} 店共 0 筆台中物件`);
       ycData = { at: now, ...r };
       save(F.ycList, ycData);
       runLog.sources['同體系'] = { ok: true, count: r.listings.length };
