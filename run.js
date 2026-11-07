@@ -25,6 +25,7 @@ const F = {
 };
 const peers = require('./lib/peers');
 const desc591 = require('./lib/desc591');
+const broker = require('./lib/broker');
 
 const load = (f, fb) => { try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch { return fb; } };
 const save = (f, d) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.writeFileSync(f, JSON.stringify(d)); };
@@ -281,6 +282,21 @@ async function main() {
   }
   const descOf = ms => ms.flatMap(m => String(m.source).startsWith('591') ? desc591.labels(descSt, String(m.sourceId)) : []);
 
+  // ---- 同體系第二道：591 刊登的經紀業資訊（分店名／經紀業公司名／證號／店電話）認出是我們的店刊的 ----
+  //   11/07 用戶：除了店名電話，也從經紀業名、經紀業號篩。地址比對（matchSameSystem）沒中的靠這個補
+  const brokerIdx = broker.buildIndex(cfg.excludedStores);
+  const learned = broker.learnLicenses([...live591].map(id => desc591.brokerOf(descSt, id)).filter(Boolean), brokerIdx);
+  const brokerMatch = ms => {
+    for (const x of ms) {
+      if (!String(x.source).startsWith('591')) continue;
+      const h = broker.match(desc591.brokerOf(descSt, String(x.sourceId)), brokerIdx);
+      // 網站／LINE 看得到 why → 只寫依據類別（分店／經紀業／證號／電話），不寫店家電話、公司名
+      if (h) return { level: '高', storeCount: 1, stores: [h.store], url: x.url, by: h.by.split(/[：\s]/)[0] };
+    }
+    return null;
+  };
+  let brokerHits = 0;
+
   const cards = [];
   const blocked = [];
   const pool = [];
@@ -341,6 +357,7 @@ async function main() {
     const first = firstM._first;
     // 網站上有人標「比對錯了」→ 不算同體系，改回可開發
     let m = core.matchSameSystem(rep, storeIdx);
+    if (!m) { m = brokerMatch(ms); if (m) { brokerHits++; why.push(`同體系店家自己刊的（${m.by}）`); } }
     if (m && overrides.has(id)) { m = null; why.push('同體系比對經人工確認不是同一戶'); }
 
     // 案件池（給客需配對）：所有在架物件，精簡欄位（全部下架的不推給客人）
@@ -381,7 +398,7 @@ async function main() {
       wide: !cfg.districts.includes(rep.district),
       firstSeen: first, isNew: Date.parse(first) > bootstrapCut && Date.now() - Date.parse(first) < 48 * 3600e3
     };
-    if (m) blocked.push({ ...card, url: ms[0].url, level: m.level, storeCount: m.storeCount, ycUrl: m.url });
+    if (m) blocked.push({ ...card, url: ms[0].url, level: m.level, storeCount: m.storeCount, ycUrl: m.url, ...(m.by && { via: m.by }) });
     else cards.push(card);
   }
   cards.sort((a, b) => b.score - a.score);
@@ -437,6 +454,7 @@ async function main() {
   save(path.join(ROOT, 'docs', 'pool.json'), { generatedAt: now, districts: cfg.districts, items: pool });
   tracker.runs = [runLog, ...(tracker.runs || [])].slice(0, 50);
   save(F.tracker, tracker);
+  console.log(`[同體系] 經紀業資訊多認出 ${brokerHits} 件（從刊登學到證號 ${learned} 個）`);
   console.log(`完成：在架 ${active.length} → 去重 ${groups.length} → 有競爭力可開發 ${cards.length}（同體系已有、排除 ${blocked.length}）`);
 
   // 全部來源都失敗才讓排程標紅
