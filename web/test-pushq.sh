@@ -15,7 +15,7 @@ http.createServer((q,r)=>{let b="";q.on("data",d=>b+=d).on("end",()=>{
   fs.appendFileSync("'$P'/line.log",`${q.url.split("/").pop()} ${[].concat(j.to).length}｜${t.split("\n")[1]||""}｜${(t.match(/【新的可開發】(\d+)/)||[])[1]||0}件\n`);
   r.end("{}");});}).listen('$LP');' &
 FAKE=$!
-printf "INGEST_KEY=k\nLINE_SECRET=s\nLINE_TOKEN=t\nLINE_ALLOW=Ua,Ub\nTEST_NOW=1\nLINE_API=http://127.0.0.1:$LP\n" > .dev.vars
+printf "INGEST_KEY=k\nLINE_SECRET=s\nLINE_TOKEN=t\nLINE_ALLOW=Ua,Ub\nTEST_NOW=1\nNO_LINKCHECK=1\nLINE_API=http://127.0.0.1:$LP\n" > .dev.vars
 npx wrangler d1 execute radar-db --local --persist-to $P --file=schema.sql >/dev/null 2>&1
 npx wrangler dev --local --persist-to $P --port $PORT --test-scheduled > $P/dev.log 2>&1 &
 DEV=$!

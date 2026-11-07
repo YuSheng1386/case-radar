@@ -796,8 +796,8 @@ export async function answerFor(S, uid, text) {
     return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + HELP;
   if (off && off >= res.length) return '已經是最後一頁了';
   await S.put(stKey, JSON.stringify({ text: src, off }), { expirationTtl: 3600 });
-  return page(res, q, off, meta.at, items) + (noLoc ? `\n（另有 ${noLoc} 件地址只寫到區，算不出距離）` : '') + mapUrl
-    + `\n${SITE}/#${q.mode === 'match' ? 'clients' : 'dev'}`;
+  // 11/07：不再附網站首頁（要登入，朋友點了打不開）；地圖跟物件連結都免登入
+  return page(res, q, off, meta.at, items) + (noLoc ? `\n（另有 ${noLoc} 件地址只寫到區，算不出距離）` : '') + mapUrl;
 }
 
 // 中心點：①路名座標表裡的路（整條路的各段）②快取 ③即時定位（內政部／OpenStreetMap：學校、賣場、地標）

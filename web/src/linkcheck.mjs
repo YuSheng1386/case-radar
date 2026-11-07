@@ -39,11 +39,17 @@ export const deadNote = (site, tok) => `⚠️平台刊登可能已下架，案�
 export const CASE_TTL = 30 * 86400;
 export const caseToken = () => [...crypto.getRandomValues(new Uint8Array(12))].map(b => b.toString(16).padStart(2, '0')).join('');
 
-// urls 依偏好排好；回第一個還在的，全部失效回 null
+// 平台偏好（用戶 11/07：591 常過期、推出去打開已下架；永慶、信義等仲介品牌比較不會）
+//   同一案有好幾個平台：永慶、信義 → 住商、東森 → 5168 → 591；同一級照原本順序（開價低的先）
+const RANK = [[/yungching\.com\.tw|sinyi\.com\.tw/, 0], [/hbhousing\.com\.tw|etwarm\.com\.tw/, 1], [/5168\.com\.tw/, 2], [/591\.com\.tw/, 3]];
+export const rankOf = u => (RANK.find(([re]) => re.test(u)) || [0, 1.5])[1];
+export const prefer = urls => (urls || []).map((u, i) => [u, i]).sort((a, b) => rankOf(a[0]) - rankOf(b[0]) || a[1] - b[1]).map(x => x[0]);
+
+// urls：同一案各平台網址；依平台偏好排過，回第一個還在的，全部失效回 null
 export async function pickAlive(urls) {
   // 2026-10-24 前的 591 網址少了 /2/（索引、追蹤檔裡可能還有），先補正再測
   const fix = x => x.replace(/(sale\.591\.com\.tw\/home\/house\/detail\/)(?=\d+\.html)/, '$12/');
-  const u = [...new Set((urls || []).filter(Boolean).map(fix))];
+  const u = prefer([...new Set((urls || []).filter(Boolean).map(fix))]);
   if (!u.length) return '';
   // 先只測第一個（大多還在）；打不開才同時測其餘的
   //   Worker 免費方案一次最多 50 個對外請求：LINE 一頁 8 件 × 每件好幾個平台全測會逼近上限

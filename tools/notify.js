@@ -37,7 +37,7 @@ const ownerOnly = c => c.posters && c.posters.owner && c.posters.agents === 0;
 // 照「字」切，不照 UTF-16 切：.slice 會把標題裡的 emoji 切成半個，LINE 收到不合法的文字整則拒收（10/24 查詢沒回應就是這個）
 const cut = (s, n) => Array.from(String(s || '')).slice(0, n).join('');
 // 每件一行：分數＋物件，下一行列出「為什麼值得看」的全部理由（用戶 10/21：不要只貼一個標籤像在分類）
-// 各平台網址，開價最低的先（推播時 pickLinks 會跳過失效的）
+// 各平台網址，開價最低的先；pickAlive 再依平台偏好排（永慶、信義優先，591 最後），跳過失效的
 const srcUrls = c => (c.sources || []).slice().sort((a, b) => (a.price || 1e9) - (b.price || 1e9)).map(s => s.url).filter(Boolean);
 // 傳出前測連結：c._url 設成第一個還在的；全部失效照樣推（優質案件不能漏），改附案件快照頁（不用登入）；回傳失效件數
 async function pickLinks(cards) {
@@ -186,7 +186,7 @@ async function main() {
     const rp = c.ll ? null : roads.items[roadKey(c.district, c.address)]?.pts;
     const ll = c.ll || (rp && rp[Math.floor(rp.length / 2)]) || null;
     const p = c.price;
-    return { id: c.id, sc: c.score, own: ownerOnly(c) ? 1 : 0, x: cardLine(c), ll, ap: c.ll ? 0 : 1, p, u: c._url || '',
+    return { id: c.id, sc: c.score, own: ownerOnly(c) ? 1 : 0, x: cardLine(c), ll, ap: c.ll ? 0 : 1, p, u: c._url || '', ua: srcUrls(c).slice(0, 6),   // 各平台網址：網站推之前重挑（永慶、信義優先）
       k: ownerOnly(c) ? 'own' : c.score >= NOTIFY_SCORE ? 'good' : '' };
   });
   st.init = st.init || now;

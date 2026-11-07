@@ -44,24 +44,68 @@ export function decide(q, ms, R = RULE) {
 }
 
 const HEAD = { start: '🌅 今天的開發清單（昨天 9 點後新出現的）', urgent: '🔥 特急件（85 分以上），先看這幾件', min: '📦 累積滿 5 件', end: '🌙 今天收尾', test: '🧪 測試推播・只推給你' };
-export function buildMsg(q, ms, why, mapUrl = '') {
+// 11/07 用戶：「推沒過期的案件、可以直接看」→ 每件都列出來（附還在架的平台連結），不再附要登入的網站網址；
+//   一個對話框放不下就分成好幾框（同一次推送最多 5 框，額度一樣只算 1 則×人數）
+const BOX = 4900;
+export function buildMsgs(q, ms, why, mapUrl = '', maxBox = 4) {
   const t = tw(ms);
-  const cards = q.cards.slice().sort((a, b) => b.sc - a.sc);
+  const cards = q.cards.slice().sort((a, b) => (a.dead || 0) - (b.dead || 0) || b.sc - a.sc);   // 各平台都下架的排最後
   const cls = Object.values(q.clients).filter(x => x.items.length);
-  let msg = `🏠 案件雷達 ${t.getUTCMonth() + 1}/${t.getUTCDate()} ${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}\n${HEAD[why] || ''}\n`;
-  if (cards.length) {
-    msg += `\n【新的可開發】${cards.length} 件\n` + cards.slice(0, 8).map(c => c.x).join('\n');
-    if (cards.length > 8) msg += `\n…另 ${cards.length - 8} 件（地圖／網站看全部）`;
-    msg += '\n';
-  }
+  let head = `🏠 案件雷達 ${t.getUTCMonth() + 1}/${t.getUTCDate()} ${String(t.getUTCHours()).padStart(2, '0')}:${String(t.getUTCMinutes()).padStart(2, '0')}\n${HEAD[why] || ''}\n`;
   if (cls.length) {
-    msg += `\n【客戶新配對】\n` + cls.map(x => {
+    head += `\n【客戶新配對】\n` + cls.map(x => {
       const top = x.items.slice().sort((a, b) => b.ms - a.ms)[0];
       return `・${x.name}：${x.items.length} 件（最高 ${top.c} ${top.p}萬，配對${top.ms}）`;
     }).join('\n') + '\n';
   }
-  if (mapUrl) msg += `\n🗺 地圖：${mapUrl}`;
-  return cut(msg + `\n${SITE}/#${cards.length ? 'dev' : 'clients'}`, 4900);
+  if (mapUrl) head += `\n🗺 地圖（點標記看物件）：${mapUrl}\n`;
+  if (cards.length) head += `\n【新的可開發】${cards.length} 件\n`;
+  const boxes = [head];
+  let shown = 0;
+  for (const c of cards) {
+    const line = cut(c.x, 600) + '\n';
+    const last = boxes.length - 1;
+    if (Array.from(boxes[last]).length + Array.from(line).length <= BOX - 60) boxes[last] += line;
+    else if (boxes.length < maxBox) boxes.push(line);
+    else break;
+    shown++;
+  }
+  if (shown < cards.length) boxes[boxes.length - 1] += `…另 ${cards.length - shown} 件分數較低的放不下，看上面的地圖`;
+  return boxes.map(b => cut(b.trimEnd(), BOX));
+}
+export const buildMsg = (q, ms, why, mapUrl = '') => buildMsgs(q, ms, why, mapUrl).join('\n\n');
+
+// 推出去前重測連結（9 點那則是累積一整天的，中間可能已下架）：
+//   用戶 11/07：不是拿掉，是同一案換還在架的平台；591 常過期 → 永慶、信義優先（linkcheck.mjs prefer）
+//   各平台都確定下架才改附快照頁（照樣列、排最後）
+//   591 對 Cloudflare 機房不一定回 404 → 591 的下架主要靠 run.js 5b 抽查＋qual
+//   Worker 一次最多 50 個對外請求：最多測 30 件（分數高的先），其餘用 GitHub 那邊挑好的連結
+const deadU = u => !/^https?:\/\//.test(u || '') || /\/c\/[0-9a-f]{8,}/.test(u);
+async function relink(env, cards) {
+  if (env.NO_LINKCHECK) return cards;
+  const { pickAlive, deadNote, caseToken, CASE_TTL } = await import('./linkcheck.mjs');
+  const S = store(env);
+  const test = new Set(cards.slice().sort((a, b) => b.sc - a.sc).slice(0, 30).map(c => c.id));
+  await Promise.all(cards.filter(c => test.has(c.id)).map(async c => {
+    const us = [...new Set([c.u, ...(c.ua || [])].filter(u => u && !deadU(u)))];
+    if (!us.length) return;
+    const got = await pickAlive(us);   // 依平台偏好（永慶、信義優先，591 最後）挑第一個還在的
+    const cur = (String(c.x).match(/https?:\/\/\S+/) || [])[0];
+    if (got) {
+      c.dead = 0;
+      if (got !== c.u) { c.x = cur ? c.x.replace(cur, got) : `${c.x}\n  ${got}`; c.u = got; }
+      return;
+    }
+    // 各平台都下架了：照樣列（不跳過），改附免登入的案件快照，排到最後
+    const tok = caseToken();
+    await S.put(`case-${tok}`, JSON.stringify({ t: c.x.split('\n').filter(l => !/https?:\/\//.test(l)).join('\n').trim(), us, q: '', at: new Date().toISOString() }),
+      { expirationTtl: CASE_TTL });
+    const note = deadNote(SITE, tok);
+    c.x = c.x.split('\n').filter(l => !/https?:\/\//.test(l)).join('\n') + `\n  ${note}`;
+    c.u = note; c.dead = 1;
+  }));
+  for (const c of cards) if (deadU(c.u)) c.dead = 1;
+  return cards;
 }
 
 // 早上推播附的開發查詢小抄（11/07 用戶：朋友白天自己查，用開發方向當關鍵字；件數是 11/07 正式資料實測）
@@ -91,6 +135,7 @@ export async function flush(env, why, ms = Date.now(), qIn = null) {
   const S = store(env);
   if (why === 'end') return { pushed: 0, why, note: '20 點不再收尾（11/07 改規則），留到明天 9 點一起推' };
   const qAll = qIn || merge(await S.get('nq', 'json'));
+  qAll.cards = await relink(env, qAll.cards);   // 推前重挑連結：同一案改用還在架的平台（永慶、信義優先）
   // 特急：只推 85 分以上那幾件，其餘（含客戶新配對）留到明天早上
   const isU = c => c.sc >= RULE.urgent;
   const q = why === 'urgent' ? { cards: qAll.cards.filter(isU), clients: {}, pushes: qAll.pushes } : qAll;
@@ -122,18 +167,18 @@ export async function flush(env, why, ms = Date.now(), qIn = null) {
       { expirationTtl: 14 * 86400 });
     mapUrl = `${SITE}/m/${tok}`;
   }
-  const text = buildMsg(q, ms, why, mapUrl);
+  const texts = buildMsgs(q, ms, why, mapUrl, why === 'start' ? 4 : 5);
   const multi = to.length > 1;
   const r = await fetch(`${api(env)}/v2/bot/message/${multi ? 'multicast' : 'push'}`, {
     method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ to: multi ? to : to[0], messages: [{ type: 'text', text: text.toWellFormed() },
+    body: JSON.stringify({ to: multi ? to : to[0], messages: [...texts.map(text => ({ type: 'text', text: text.toWellFormed() })),
       // 早上 9 點附開發查詢小抄（同一次推送的第二個對話框：LINE 額度算「次數×人數」，一次最多 5 框都算 1 則；按鈕點了是查詢＝回覆，不花額度）
       ...(why === 'start' ? [TIP] : [])] })
   });
   if (!r.ok) return { pushed: 0, why, n: count(q), note: `LINE 推播失敗 ${r.status} ${(await r.text()).slice(0, 200)}` };
   const n = count(q);
   if (!qIn) await S.put('nq', JSON.stringify({ ...rest, pushes: { [day]: used + to.length } }));   // 測試推播不清累積；特急只拿掉推過的
-  return { pushed: to.length, why, n };
+  return { pushed: to.length, why, n, dead: q.cards.filter(c => c.dead).length };
 }
 
 // GitHub 排程交進新案：併進佇列，白天符合條件就馬上推
