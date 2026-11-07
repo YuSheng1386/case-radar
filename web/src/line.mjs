@@ -9,7 +9,7 @@
 import { findPlace, km } from './geo.mjs';
 import { store } from './store.mjs';
 import { pickAlive, deadNote, caseToken, CASE_TTL } from './linkcheck.mjs';
-import { rulesFor, RULE_BTNS, ensureMenus } from './rules.mjs';
+import { rulesFor, RULE_BTNS, ensureMenus, answerQuestion, SHORT_HELP } from './rules.mjs';
 // 對話選單（朋友＝使用規則；管理者＝管理＋使用規則合併），名字沿用 worker.js 的 import
 export const ensureFriendMenu = (env, S) => ensureMenus(env, S, envIds(env)[0]);
 
@@ -465,7 +465,9 @@ export function page(res, q, off, at, items) {
       '\n\n打「說明」看可以用的條件';
   }
   const sl = res.slice(off, off + PAGE);
-  let msg = `${head}\n共 ${res.length} 件，第 ${off + 1}–${off + sl.length} 件（${SORT_L[q.sort] || (q.mode === 'match' ? '總價低的先' : '分數高的先')}；資料 ${when}）\n\n` + sl.map(x => x.x).join('\n');
+  const un = l => l.replace(/[「」]/g, '');
+  const rl = q.relaxed ? `⚠️ 沒有完全符合的，先拿掉「${un(q.relaxed.l)}」列給你看${q.relaxed.alt.length ? `（也可以改拿掉 ${q.relaxed.alt.map(([l, n]) => `「${un(l)}」${n} 件`).join('、')}）` : ''}\n` : '';
+  let msg = `${head}\n${rl}共 ${res.length} 件，第 ${off + 1}–${off + sl.length} 件（${SORT_L[q.sort] || (q.mode === 'match' ? '總價低的先' : '分數高的先')}；資料 ${when}）\n\n` + sl.map(x => x.x).join('\n');
   msg += off + PAGE < res.length ? `\n\n回「更多」看下 ${Math.min(PAGE, res.length - off - PAGE)} 件` : '\n\n（已經是最後一頁）';
   return msg.slice(0, 4900);
 }
@@ -709,6 +711,8 @@ export async function answerFor(S, uid, text) {
   }
   let q = parse(src, meta.districts, meta.main, meta.where || {});
   if (q.needWhere && !meta.where) { const w = await S.get('line-where', 'json'); if (w) q = parse(src, meta.districts, meta.main, w); }
+  // 問用法的問句（不像查詢：沒指定區域、沒有任何條件，只剩看不懂的字）→ 直接回對應的規則（11/07：有問題線上就解決）
+  if ((q.scope === '主力區' || q.scope === '全台中') && q.conds.every(c => c.k === 'kw')) { const a = answerQuestion(src); if (a) return a; }
   if (q.none) return HELP;
   // 案件只有路名時的位置：路名座標表（tools/roads.js → line-index 的 line-roads），附近查詢或畫地圖時才讀
   let R = null;
@@ -737,7 +741,17 @@ export async function answerFor(S, uid, text) {
   const items = parts.flatMap((p, i) => !p || p.d !== q.ds[i] ? [] : q.mode === 'match'
     ? p.items.map((a, j) => { const o = poolItem(a, meta.pkeys, p.d, j); if (needT) o.t = tks[i]?.t[j] || ''; return o; })
     : p.items.map((x, j) => (x._d = p.d, x._j = j, x)));
-  const res = filter(items, q);
+  let res = filter(items, q);
+  // 查不到 → 自動拿掉擋最多的那個條件，直接列出來並註明（11/07 用戶：有問題能線上解決，不用等回報）
+  //   只剩看不懂的字（全部 kw）不放寬，走下面「看不懂」；全台中只剩一個條件也不放寬（會變成列全台中）
+  if (!res.length && q.conds.some(c => c.k !== 'kw')) {
+    const rx = relax(items, q), drop = rx.length && q.conds.find(c => !c.soft && c.l === rx[0][0]);
+    if (drop && (q.conds.length > 1 || q.scope !== '全台中')) {
+      q.relaxed = { l: drop.l, alt: rx.slice(1) };
+      q.conds = q.conds.filter(c => c !== drop);
+      res = filter(items, q);
+    }
+  }
   // 附近：每件算距離；沒指定排序就近的先
   let noLoc = 0;
   if (near) {
@@ -799,7 +813,7 @@ export async function answerFor(S, uid, text) {
   }
   // 只有認不得的字、又什麼都沒對到（例如「你好」）→ 回說明
   if (!res.length && q.scope === '全台中' && q.conds.every(c => c.k === 'kw'))
-    return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + HELP;
+    return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + SHORT_HELP;
   if (off && off >= res.length) return '已經是最後一頁了';
   await S.put(stKey, JSON.stringify({ text: src, off }), { expirationTtl: 3600 });
   // 11/07：不再附網站首頁（要登入，朋友點了打不開）；地圖跟物件連結都免登入
@@ -971,7 +985,7 @@ async function handle(env, ev) {
     const t0 = Date.now();
     // 選單「今天的案件」＝查「新上架」（回覆不花推播額度）
     const out = await answer(env, uid, /^(今天的案件|今天案件|今日案件|今天的開發清單)$/.test(t) ? '新上架' : t);
-    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP));
+    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP) || out.startsWith('看不懂'));
     await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: outcome(out), ms: Date.now() - t0 });
   }
 }
