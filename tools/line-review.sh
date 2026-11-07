@@ -4,6 +4,8 @@
 #   答不了的同類問題多了 → 加功能或加進 rules.mjs 說明
 # 用法：bash tools/line-review.sh [天數，預設 14]
 cd "$(dirname "$0")/.."
+# 從 PowerShell 直接叫（wsl --cd … -- bash …）不是登入 shell，找不到 node → 補上路徑
+command -v node >/dev/null || export PATH="$HOME/.local/node/bin:/home/uheng/.local/node/bin:$PATH"
 KEY=$(cat web/.ingest-key)
 URL=${RADAR_URL:-https://case-radar.yusheng1386.workers.dev}
 node -e '

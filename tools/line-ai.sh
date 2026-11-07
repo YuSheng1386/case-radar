@@ -2,6 +2,8 @@
 # 測正式網站的 LINE 智能客服（規則＋AI），不經 LINE、不回覆任何人
 # 用法：bash tools/line-ai.sh "西區 雙主臥 四房 三車位 預算8000萬內"   （多句：每行一句從 stdin 餵）
 cd "$(dirname "$0")/.."
+# 從 PowerShell 直接叫（wsl --cd … -- bash …）不是登入 shell，找不到 node → 補上路徑
+command -v node >/dev/null || export PATH="$HOME/.local/node/bin:/home/uheng/.local/node/bin:$PATH"
 KEY=$(cat web/.ingest-key)
 URL=${RADAR_URL:-https://case-radar.yusheng1386.workers.dev}
 ask() {
