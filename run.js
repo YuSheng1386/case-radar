@@ -32,6 +32,7 @@ const save = (f, d) => { fs.mkdirSync(path.dirname(f), { recursive: true }); fs.
 // 永慶／信義資料取自地政系統，欄位最可信；仲介手打的平台排後面
 const TRUST = ['信義', '永慶', '住商', '東森', '5168', '591'];
 const trustRank = s => { const i = TRUST.indexOf(s); return i < 0 ? 99 : i; };
+const BRAND = new Set(['信義', '永慶', '住商', '東森']);   // 房仲品牌平台：資料由公司系統出，比 591 仲介手填可靠
 // 屋主刊登下架常常只是廣告到期，屋主不一定賣掉了（用戶 10/24）→ 先保留 30 天，仍可開發；仲介刊登下架照舊
 const OWNER_KEEP_DAYS = 30;
 const ownerGoneDays = rec => rec.removedAt && rec.d?.isOwner ? (Date.now() - Date.parse(rec.removedAt)) / 864e5 : null;
@@ -291,7 +292,10 @@ async function main() {
       area: pick('area'), mainArea: pick('mainArea'), floor: pick('floor'), age: pick('age'),
       layout: pick('layout'), type: pick('type'), photo: pick('photo')
     };
-    const prices = ms.map(m => m.price).filter(Boolean);
+    // 總價：同一案有房仲品牌平台（信義、住商、東森）就用品牌的開價；只有 591／5168 才取最低
+    //   用戶 11/07：591 多是仲介自己填，數字不一定對（填錯的低價會被算成「低於行情」）
+    const brandP = ms.filter(m => BRAND.has(m.source)).map(m => m.price).filter(Boolean);
+    const prices = brandP.length ? brandP : ms.map(m => m.price).filter(Boolean);
     rep.price = prices.length ? Math.min(...prices) : null;
     rep.unitPrice = rep.price && rep.area ? Math.round(rep.price / rep.area * 100) / 100 : pick('unitPrice');
 

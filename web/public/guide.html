@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>案件雷達使用規則</title>
+<!-- 11/07：朋友用 LINE 選單「使用規則」點進來（免登入）；內容跟 src/rules.mjs 一致，改規則兩邊一起改 -->
+<style>
+:root { --bg:#f6f8fa; --card:#fff; --fg:#1f2328; --mute:#57606a; --line:#d0d7de;
+  --dev:#2da44e; --match:#bf8700; --same:#8250df; --push:#cf222e; --link:#1f6feb; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0d1117; --card:#161b22; --fg:#e6edf3; --mute:#9198a1; --line:#30363d; } }
+* { box-sizing: border-box; }
+body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.7 system-ui,-apple-system,"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif; }
+main { max-width:720px; margin:0 auto; padding:20px 16px 48px; }
+h1 { font-size:24px; margin:4px 0 4px; }
+.lead { color:var(--mute); margin:0 0 16px; }
+nav { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 20px; }
+nav a { text-decoration:none; color:var(--fg); border:1px solid var(--line); background:var(--card); border-radius:999px; padding:4px 12px; font-size:14px; }
+section { background:var(--card); border:1px solid var(--line); border-top:5px solid var(--c); border-radius:12px; padding:14px 18px; margin:0 0 16px; }
+h2 { font-size:19px; margin:0 0 8px; color:var(--c); }
+h3 { font-size:15px; margin:14px 0 4px; }
+ul { margin:4px 0; padding-left:20px; }
+li { margin:2px 0; }
+code { background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:0 6px; font-family:inherit; white-space:nowrap; }
+.warn { border-left:4px solid var(--push); padding:6px 10px; background:var(--bg); border-radius:6px; margin:8px 0; }
+table { border-collapse:collapse; width:100%; font-size:15px; }
+td { border-top:1px solid var(--line); padding:6px 4px; vertical-align:top; }
+td:last-child { white-space:nowrap; text-align:right; color:var(--c); font-weight:600; }
+</style>
+</head>
+<body>
+<main>
+<h1>案件雷達使用規則</h1>
+<p class="lead">系統每天多次自動抓台中售屋（591、5168、信義、住商、東森），同一戶在好幾個平台會合併成一件。用法分三種：開發、配對、同公司物件。</p>
+<nav><a href="#dev">開發</a><a href="#match">配對</a><a href="#same">同公司</a><a href="#push">推播</a><a href="#link">連結與資料</a><a href="#ask">怎麼查</a></nav>
+
+<section id="dev" style="--c:var(--dev)">
+<h2>開發：找有機會簽的案子</h2>
+<ul>
+<li>主力 8 區：南屯、南區、西區、東區、大里、太平、北屯、西屯（打路名、社區名或「全台中」可以查全部）</li>
+<li>只列有競爭力的：有屋主刊登的都列；其他要 20 分以上</li>
+<li><b>60 分以上＝優質</b>，<b>85 分以上＝特急</b>；同公司已經在賣的不列</li>
+<li>每件分數下一行就是理由，例如「只有屋主在賣・降價6%・比同等級社區低9%」</li>
+</ul>
+<h3>分數怎麼算（加總，最高 100）</h3>
+<table>
+<tr><td>賠售／平台標示低於行情</td><td>+25</td></tr>
+<tr><td>急售</td><td>+18</td></tr>
+<tr><td>超值</td><td>+12</td></tr>
+<tr><td>屋主自售</td><td>+12</td></tr>
+<tr><td>只有屋主在賣、沒有仲介（最好開發）</td><td>再 +8</td></tr>
+<tr><td>降價：系統自己記開價，實測降幅越大越高</td><td>最多 +25</td></tr>
+<tr><td>只有平台標「降價」、沒測到降幅</td><td>+10</td></tr>
+<tr><td>開價比同社區實價登錄成交低（低一點／8%／15%）</td><td>+20／+30／+40</td></tr>
+<tr><td>比社區最低成交還低</td><td>再 +10</td></tr>
+<tr><td>跟附近同等級社區、同房數、坪數相近的成交比還是低（最強訊號）</td><td>+10～+30</td></tr>
+<tr><td>5 位以上仲介在刊（多半一般約）</td><td>−5</td></tr>
+</table>
+</section>
+
+<section id="match" style="--c:var(--match)">
+<h2>配對：幫客人找房</h2>
+<ul>
+<li>前面加「配對」或「客戶」：<code>配對 南屯 3房 1500萬以下 平面車位</code></li>
+<li>跟開發不同：<b>所有在架物件</b>只要符合條件就列，不看分數</li>
+<li>預設含同公司的物件（標🔒，可以直接帶客人看）；不要就加「不要同體系」</li>
+<li>排序：「最便宜」「單價最低」「最新」「坪數最大」；回「更多」看下一頁，每次附地圖</li>
+</ul>
+</section>
+
+<section id="same" style="--c:var(--same)">
+<h2>同公司（同體系）物件</h2>
+<p>我們體系的店已經在賣的物件，系統自動比對：</p>
+<ul>
+<li>同一區，而且同社區或同路段</li>
+<li>總價差 8% 內；兩邊都有坪數 → 坪差 5% 內；兩邊都有樓層 → 樓層相同</li>
+<li>坪數、樓層都比不了 → 只認同社區、價差 3% 內</li>
+</ul>
+<h3>怎麼處理</h3>
+<ul>
+<li><b>開發</b>：預設不列、不推播（同公司已經有了，不重複踩）。要看打「含同體系」（標🔒），「只看同體系」只列同公司的</li>
+<li><b>配對</b>：預設照列（標🔒）；「不要同體系」排除</li>
+<li>比對錯了（同公司的被當開發案、或不是同一戶卻標🔒）→ 打「回報 ＋案件＋哪裡錯」，人工確認後修正</li>
+</ul>
+</section>
+
+<section id="push" style="--c:var(--push)">
+<h2>推播</h2>
+<ul>
+<li><b>每天 09:00 一則</b>：昨天 9 點以後新出現、值得開發的全部（只有屋主在賣的，或 60 分以上）</li>
+<li>白天有 <b>85 分以上</b>特急件 → 馬上推那幾件，其他留到隔天早上</li>
+<li>晚上 8 點到隔天 9 點不推（特急也等早上）；只推主力 8 區；同公司的不推</li>
+<li>打「訂閱推播」開、「取消推播」關</li>
+<li>不收推播也行：點對話選單「今天的案件」自己看（點了是回覆，不花推播額度）</li>
+</ul>
+</section>
+
+<section id="link" style="--c:var(--link)">
+<h2>連結與資料</h2>
+<ul>
+<li>同一戶有好幾個平台時，連結優先給房仲品牌（信義、住商、東森），再來 5168，591 最後</li>
+<li>推出去前會再測一次，下架了就換同一戶的其他平台；全部平台都下架才附案件快照頁（排最後）</li>
+<li>總價也以品牌平台為準</li>
+</ul>
+<p class="warn">591 多半是仲介自己填，坪數、價格不一定正確。只有 591 的案子，數字請以現場、謄本為準。</p>
+</section>
+
+<section id="ask" style="--c:var(--fg)">
+<h2>怎麼查（直接在 LINE 打字）</h2>
+<ul>
+<li>開發：<code>東區優質透天</code> <code>只有屋主 這週</code> <code>這週 降價</code> <code>分數80以上</code></li>
+<li>附近：<code>太平運動場附近 透天</code> <code>科博館 開車5分鐘 大樓</code></li>
+<li>配對：<code>配對 大里 2000萬內 透天</code></li>
+<li>打「說明」看全部條件寫法，「規則」看這份重點；查不到想要的打「回報 ＋你想說的」</li>
+</ul>
+</section>
+</main>
+</body>
+</html>

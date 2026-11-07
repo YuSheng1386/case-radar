@@ -9,6 +9,8 @@
 import { findPlace, km } from './geo.mjs';
 import { store } from './store.mjs';
 import { pickAlive, deadNote, caseToken, CASE_TTL } from './linkcheck.mjs';
+import { rulesFor, RULE_BTNS, ensureFriendMenu } from './rules.mjs';
+export { ensureFriendMenu };
 
 const PAGE = 8;
 const MAP_MAX = 150;   // 地圖最多標幾件
@@ -37,7 +39,8 @@ const HELP = `🏠 案件雷達查詢
 ・配對：前面加「配對」或「客戶」＝所有在架物件，只要符合就列（不看分數），預設含同體系（「不要同體系」排除）
 例（配對）：「配對 南屯 3房 1500萬以下 平面車位」
 例：「東區優質透天」「屯區 20年內 透天 有車位」「崇德路 3房 最便宜」
-回「更多」看下一頁；每次查詢都附地圖連結；打「範例」看常用問法`;
+回「更多」看下一頁；每次查詢都附地圖連結；打「範例」看常用問法
+打「規則」看作業方式（開發、配對、同公司怎麼分、推播什麼時候推）`;
 
 // 加好友的第一則（看完就會用；完整條件打「說明」）
 const WELCOME = `👋 歡迎使用案件雷達
@@ -57,7 +60,9 @@ const WELCOME = `👋 歡迎使用案件雷達
 前面加「配對」：「配對 大里 2000萬內 透天」
 
 ・回「更多」看下一頁，每次都附地圖
+・打「規則」看作業方式（開發、配對、同公司物件、推播）
 ・打「說明」看全部條件（價格、坪數、樓層、車位、屋主自售、降價…）
+・對話下面的選單＝使用規則＋「今天的案件」（點了不花推播額度）
 ・不用打完整，「少於30年」「大於四房」「2000以下」都看得懂
 ・查不到想要的、結果怪怪的 → 打「回報 ＋你想說的」，會照著改
 
@@ -899,7 +904,9 @@ export async function webhook(req, env, ctx) {
   const ev = JSON.parse(new TextDecoder().decode(raw)).events || [];
   // 先回 LINE 200、查詢放背景跑（reply token 有效約 1 分鐘）
   //   10/30：有結果的查詢要測各平台連結，整段約 2 秒，LINE 先斷線 → Worker 被取消（outcome canceled）、回覆送不出去（已讀不回）
-  const job = handle(env, ev).catch(e => console.log(`LINE 查詢失敗：${e.stack || e.message}`));
+  const job = Promise.all([handle(env, ev).catch(e => console.log(`LINE 查詢失敗：${e.stack || e.message}`)),
+    // 朋友的對話選單（使用規則）版本變了就自己重裝
+    ensureFriendMenu(env, store(env)).then(r => r.richMenuId && console.log('[選單] 朋友選單已更新', r.richMenuId), e => console.log(`[選單] 失敗 ${e.message}`))]);
   if (ctx?.waitUntil) { ctx.waitUntil(job); return new Response('ok'); }
   await job;
   return new Response('ok');
@@ -957,8 +964,12 @@ async function handle(env, ev) {
       await reply(env, e.replyToken, on ? '✅ 之後每天早上 9 點會推給你今天的開發清單（85 分以上的特急件白天會即時推）\n其他時間隨時打「新上架」查；不要了打「取消推播」' : '已關掉新案推播，查詢照常可以用');
       continue;
     }
+    // 使用規則（11/07）：選單按鈕／打「規則」「開發規則」「配對規則」「同公司」「推播規則」
+    const ru = rulesFor(t);
+    if (ru) { await reply(env, e.replyToken, ru, RULE_BTNS); await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: 'rule', ms: 0 }); continue; }
     const t0 = Date.now();
-    const out = await answer(env, uid, t);
+    // 選單「今天的案件」＝查「新上架」（回覆不花推播額度）
+    const out = await answer(env, uid, /^(今天的案件|今天案件|今日案件|今天的開發清單)$/.test(t) ? '新上架' : t);
     await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP));
     await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: outcome(out), ms: Date.now() - t0 });
   }

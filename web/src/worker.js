@@ -4,7 +4,7 @@
 //   GitHub Actions：/api/ingest/*（帶 X-Ingest-Key）上傳案件資料與爬蟲狀態
 // 注意：免費方案每次請求 CPU 約 10ms → 大檔（案件池）一律原封不動串流，不在這裡解析
 
-import { webhook as lineWebhook, pushWelcome, lineStatus, usage as lineUsage, adminMenu as lineAdminMenu } from './line.mjs';
+import { webhook as lineWebhook, pushWelcome, lineStatus, usage as lineUsage, adminMenu as lineAdminMenu, ensureFriendMenu } from './line.mjs';
 import { ingest as pushIngest, flush as pushFlush, CRON as PUSH_CRON } from './pushq.mjs';
 import { geocode } from './geo.mjs';
 import { store } from './store.mjs';
@@ -106,6 +106,7 @@ export default {
   async scheduled(ev, env, ctx) {
     const why = PUSH_CRON[ev.cron];
     if (why) ctx.waitUntil(pushFlush(env, why).then(r => console.log('[推播]', ev.cron, JSON.stringify(r))));
+    ctx.waitUntil(ensureFriendMenu(env, store(env)).catch(e => console.log(`[選單] 失敗 ${e.message}`)));
   }
 };
 
