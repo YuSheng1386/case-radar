@@ -29,12 +29,15 @@ const sys = help => `你是「案件雷達」LINE 官方帳號的客服。案件
 - 「超過80分」→「分數80以上」；「這一週」→「這週」；「或」連接的多個區域 → 全部列出（「西區或七期」→「西區 西屯 七期」，七期在西屯）
 - 貼了一大段社區介紹 → 只取社區名／路名／區域當條件
 - 使用者說「那大里呢」「改成透天」這種接續的話 → 拿「上一次查詢」的全部條件，只換掉他說要改的那一項。例：上一次「配對 南屯 3房 1500萬以下 平面車位」＋「那大里呢」→「配對 大里 3房 1500萬以下 平面車位」；＋「改成透天」→「配對 南屯 3房 1500萬以下 平面車位 透天」
-- 不要自己加使用者沒說的條件
+- 不要自己加使用者沒說的條件：沒說區域就不寫區域（系統會查主力區）、沒說類型就不寫透天／大樓、沒說房數就不寫房數
+- 捷運X線附近／捷運站附近→近捷運；新一點／新的→10年內；老公寓→公寓 30年以上；便宜→最便宜（排序，不要自己編總價）；只打一個總價（「1500萬」）→「1500萬左右」
+- 打錯字照意思改：三防→3房、透天厝→透天、電梯大樓→大樓
 - note 只寫「拿掉的條件」跟「意思被換掉的條件」（例：三車位→雙車位），寫法格式的改變不用寫，最多 2 句
 - 附近地點要用找得到的：路名、學校、公園、美術館、百貨等知名地標；社區名、建案名不要拿來當附近地點（找不到），改用它所在的路名或旁邊的地標
 
 【answer 規則】
 - 只能根據下面「系統說明」回答，3～6 行，口語、繁體中文
+- 系統說明裡有提到的就一定用 answer（例：資料準不準、連結打不開、可不可以查租屋／土地／台北、怎麼加同事、地圖、推播、為什麼某件沒出現），不要用 none；說明寫「沒有」的就照實說沒有
 - 不准編造案件、價格、數字、功能；說明裡沒寫的就改用 none
 - 問特定一件案子的細節（屋主是誰、能不能議價、為什麼這件幾分）→ 依說明講分數怎麼算，細節請他點連結或打「回報」
 
@@ -94,6 +97,20 @@ async function callAI(env, help, user) {
   return null;
 }
 
+// 改寫裡出現、原句（含上一句）沒提到的區域／類型／房數
+const DIST = '中區 東區 南區 西區 北區 北屯 西屯 南屯 太平 大里 霧峰 烏日 豐原 后里 石岡 東勢 和平 新社 潭子 大雅 神岡 大肚 沙鹿 龍井 梧棲 清水 大甲 外埔 大安'.split(' ');
+const TYPES = ['透天', '大樓', '公寓', '華廈', '套房', '別墅'];
+const GROUP = /屯區|海線|山城|山線|舊市區|三屯|全台中|七期|十期|重劃/;
+export function invented(q, src) {
+  const out = [];
+  for (const d of DIST) if (q.includes(d) && !src.includes(d) && !(d === '西屯' && /七期|逢甲|中科|西屯/.test(src)) && !(GROUP.test(src))) out.push(d);
+  for (const ty of TYPES) if (q.includes(ty) && !src.includes(ty) && !(ty === '大樓' && /電梯|大廈|豪宅/.test(src)) && !(ty === '透天' && /透天|別墅/.test(src)) && !(ty === '公寓' && /公寓/.test(src))) out.push(ty);
+  if (/\d房/.test(q) && !/房|[一二三四五六七八九\d]\s*[房防]/.test(src)) out.push(q.match(/\d房\S*/)[0]);
+  // 「便宜」→ 自己編總價（11/07 模擬：「東區便宜的老公寓」→「1500萬以下」）
+  if (/\d+萬/.test(q) && !/\d|[一二三四五六七八九十百千]+萬|預算/.test(src)) out.push(q.match(/\S*\d+萬\S*/)[0]);
+  return out;
+}
+
 const twDay = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
 const norm = s => String(s).replace(/\s+/g, ' ').trim();
 
@@ -117,7 +134,9 @@ export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, hel
   // 學過的句子：直接用，不叫 AI
   if (!follow) {
     const got = await S.get(learnKey(t), 'json');
-    if (got?.q) {
+    // 學到的也要過同樣的檢查（之前學到的可能是舊規則下的錯改寫）
+    if (got?.q && !invented(got.q, t).length) {
+      if (/客戶|客人|買方|首購|幫.*找房|配對/.test(t) && !/^(配對|客戶)/.test(got.q)) got.q = `配對 ${got.q}`;
       const out2 = await answerFor(S, uid, got.q);
       const r2 = outcome(out2);
       if (typeof r2 === 'number' && r2 > 0) return { out: `🤖 我理解成：「${got.q}」\n\n${out2}`, r: r2, ai: got.q, model: 'learned' };
@@ -126,7 +145,7 @@ export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, hel
   if (!env.AI) return null;
   const k = `ai-${uid}-${twDay()}`;
   const n = Number(await S.get(k)) || 0;
-  if (n >= AI_DAY) return null;
+  if (n >= AI_DAY && !uid.startsWith('Xai-')) return null;   // 測試 ID（tools/line-ai.sh）不限次數
   await S.put(k, String(n + 1), { expirationTtl: 2 * 86400 });
   await typing(env, uid);
   const why = r === 'x' ? '系統看不懂' : r === 'geo' ? '找不到地點' : r === 0 ? '查到 0 件' : typeof r === 'number' ? '系統只照這一句查，可能漏了上一次的條件或看不懂的字' : '系統只回了說明';
@@ -138,7 +157,16 @@ export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, hel
   // 改寫後還是找不到地點／0 件 → 把結果告訴 AI 再改一次（最多 2 輪）
   let best = null;
   for (let round = 0; round < 2 && a?.type === 'search' && a.q && norm(a.q) !== norm(t); round++) {
-    const q = norm(a.q).slice(0, 200);
+    let q = norm(a.q).slice(0, 200);
+    // 講到客人／買方就一定是配對（11/07 模擬：「有個客戶要找南屯惠文國小附近」AI 漏了配對）
+    if (/客戶|客人|買方|首購|幫.*找房|配對/.test(t) && !/^(配對|客戶)/.test(q)) q = `配對 ${q}`;
+    // AI 自己加了使用者沒說的區域／類型／房數 → 退回去重改（11/07 模擬：「1500萬」→「北屯 1500萬以下」）
+    const added = invented(q, t + ' ' + (last?.text || ''));
+    if (added.length) {
+      if (round === 1) { a = null; break; }
+      a = await callAI(env, help, `${user}\n\n你上次改寫成「${q}」，但加了使用者沒說的「${added.join('、')}」。拿掉這些，再輸出一次 JSON。`);
+      continue;
+    }
     const out2 = await answerFor(S, uid, q);
     const r2 = outcome(out2);
     const note = a.note ? `\n（${String(a.note).slice(0, 200)}）` : '';

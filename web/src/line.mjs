@@ -737,7 +737,13 @@ export async function answerFor(S, uid, text) {
   let q = parse(src, meta.districts, meta.main, meta.where || {});
   if (q.needWhere && !meta.where) { const w = await S.get('line-where', 'json'); if (w) q = parse(src, meta.districts, meta.main, w); }
   // 問用法的問句（不像查詢：沒指定區域、沒有任何條件，只剩看不懂的字）→ 直接回對應的規則（11/07：有問題線上就解決）
-  if ((q.scope === '主力區' || q.scope === '全台中') && q.conds.every(c => c.k === 'kw')) { const a = answerQuestion(src); if (a) return a; }
+  if ((q.scope === '主力區' || q.scope === '全台中') && q.conds.every(c => c.k === 'kw')) {
+    const a = answerQuestion(src); if (a) return a;
+    // 問句又一個條件都沒認出來（「契稅怎麼算」「可以查台北的嗎」）→ 不讀資料直接回看不懂，交給 AI
+    //   11/07 模擬：這種句子會拿看不懂的字比對全台中 29 區，CPU 超過免費方案，連續問幾句 Worker 就被擋（LINE 完全沒回）
+    if (q.conds.length && /嗎|呢|如何|怎麼|為什麼|什麼|多少|哪裡|可以|能不能|？|\?/.test(src))
+      return `看不懂「${q.conds.map(c => c.l.replace(/[「」]/g, '')).join(' ')}」\n\n` + SHORT_HELP;
+  }
   if (q.none) return HELP;
   // 案件只有路名時的位置：路名座標表（tools/roads.js → line-index 的 line-roads），附近查詢或畫地圖時才讀
   let R = null;
@@ -1029,9 +1035,29 @@ export const UNSOLVED = '已回報 佑昇處理';
 //   /api/ingest/line-ai 也走這裡（本機 bash tools/line-ai.sh 測正式 AI，不經 LINE）
 const CMD = /^(說明|help|\?|？|怎麼用|指令|用法|全部條件|你好|您好|嗨|hi|hello|哈囉|開始|教學|使用說明|範例|例子|更多|下一頁|more|下頁|繼續)[!！。]?$/i;
 const RULE_TEXT = new Set(Object.values(KNOW));
+// 寒暄／道謝：不查資料、不叫 AI（11/07 模擬：「好的」被回「已回報」、「讚」被回整份說明）
+const CHAT = [
+  [/^(謝謝|感謝|謝啦|謝了|多謝|thx|thanks|thank you|3q|感恩)/i, '不客氣 🙏 有需要再直接打條件查'],
+  [/^(好的?|好喔|好唷|ok|okay|收到|了解|瞭解|知道了|嗯+|喔+|恩+|👌|👍|讚+|棒|太好了|好棒|不錯|可以)[!！。~～]*$/i, '👌 有需要再直接打條件查，例如「東區優質透天」'],
+  [/^(早安|午安|晚安|早|安安|辛苦了|辛苦啦|你好棒)[!！。~～]*$/, t => `${/晚安/.test(t) ? '晚安' : /辛苦/.test(t) ? '不會～' : '早安'} ☀️ 要找案件直接打條件，或點選單「今天的案件」`],
+  [/^(你是誰|妳是誰|你是什麼|你叫什麼)[?？]*$/, '我是案件雷達的查詢小幫手 🤖 幫你找台中的開發案、幫客人配對，也可以問我系統怎麼用（打「規則」看作業方式）'],
+  [/^[\p{Extended_Pictographic}‍️\s]+$/u, '👋 要找案件直接打條件，例如「南屯 1500萬以下 3房」']
+];
+function chat(t) {
+  for (const [re, a] of CHAT) if (re.test(t)) return typeof a === 'function' ? a(t) : a;
+  return null;
+}
 export async function respond(env, S, uid, t) {
+  const c = chat(t);
+  if (c) return { out: c, r: 'chat' };
+  // 要屋主／仲介的聯絡方式：系統沒有（不要當成「屋主在賣」去查）
+  if (/(屋主|仲介|業務|房東|賣方|這間|這件).{0,6}(電話|手機|聯絡|line|賴)|(電話|手機|聯絡方式).{0,4}(給我|多少|幾號)/i.test(t))
+    return { out: UNSOLVED, r: 'ai-x', why: '要屋主／仲介聯絡方式（系統沒有）' };
+  // 貼連結問單一案件：還不支援 → 直接記下來（不拿網址去比對全台中，CPU 會爆）
+  if (/https?:\/\//.test(t) && t.replace(/https?:\/\/\S+/g, '').trim().length < 6)
+    return { out: UNSOLVED, r: 'ai-x', why: '貼連結查單一案件（還不支援）' };
   // 上一次查詢要先讀（answerFor 查到結果會覆寫 lq-）
-  const last = env.AI ? await S.get(`lq-${uid}`, 'json') : null;
+  const last0 = env.AI ? await S.get(`lq-${uid}`, 'json') : null;
   // 選單「今天的案件」＝查「新上架」（回覆不花推播額度）
   const out = await answerFor(S, uid, /^(今天的案件|今天案件|今日案件|今天的開發清單)$/.test(t) ? '新上架' : t);
   const r = outcome(out);
@@ -1039,10 +1065,14 @@ export async function respond(env, S, uid, t) {
   const dropped = /先拿掉「/.test(out) && /嗎|呢|如何|怎麼|為什麼|什麼|多少|幾|？|\?/.test(t);
   // 接續上一句（「那大里呢」「改成透天」）：規則只看這一句會把前面的條件丟掉 → AI 合併上一次查詢
   const follow = /^(那|改成|換成|改看|如果是|換)/.test(t) && t.length <= 20 && !/^那些/.test(t);
+  // 上一次查詢只給接續句用（11/07 模擬：「南屯三防」被 AI 併進上一句的「電梯大樓 不要頂樓」）
+  const last = follow ? last0 : null;
   const weak = r === 'x' || r === 'geo' || r === 0 || dropped || follow || ((out === HELP || RULE_TEXT.has(out)) && !CMD.test(t));
   if (weak && t.length >= 2) {
     try {
       const a = await aiAssist(env, S, uid, t, out, r, { answerFor, outcome, help: HELP, last, follow });
+      // AI 說答不了、但規則本來就有對應說明 → 回規則說明（不要「已回報」）
+      if (a?.r === 'ai-x' && RULE_TEXT.has(out)) return { out, r: 'other' };
       if (a) return a.r === 'ai-x' ? { ...a, out: UNSOLVED, why: a.out.replace(/^🤖\s*/, '') } : a;
     } catch (e) { console.log(`[AI] 失敗：${e.stack || e.message}`); }
   }

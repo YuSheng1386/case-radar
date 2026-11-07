@@ -7,6 +7,7 @@
 import { webhook as lineWebhook, pushWelcome, lineStatus, usage as lineUsage, adminMenu as lineAdminMenu, ensureFriendMenu, respond as lineRespond } from './line.mjs';
 import { ingest as pushIngest, flush as pushFlush, CRON as PUSH_CRON } from './pushq.mjs';
 import { geocode } from './geo.mjs';
+import { rulesFor } from './rules.mjs';
 import { store } from './store.mjs';
 import { CASE_TTL } from './linkcheck.mjs';
 
@@ -176,8 +177,11 @@ async function api(req, env, url, p, m) {
   if (p === '/api/ingest/line-ai' && m === 'POST') {
     if (!env.INGEST_KEY || !safeEqual(req.headers.get('X-Ingest-Key') || '', env.INGEST_KEY)) return err('unauthorized', 401);
     const b = await body(req);
-    const t0 = Date.now();
-    const a = await lineRespond(env, store(env), 'Xai-test', String(b.text || '').trim());
+    const t0 = Date.now(), t = String(b.text || '').trim();
+    // 跟 LINE 一樣：規則按鈕先回（line.mjs handle）
+    const ru = rulesFor(t);
+    if (ru) return json({ out: ru, r: 'rule', ms: 0 });
+    const a = await lineRespond(env, store(env), 'Xai-test', t);
     return json({ ...a, ms: Date.now() - t0 });
   }
   if (p === '/api/ingest/line-status' && m === 'GET') {
