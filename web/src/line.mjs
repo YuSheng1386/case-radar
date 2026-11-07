@@ -622,7 +622,7 @@ async function problems(env, S, days = 7) {
   if (!fr.length) return `最近 ${days} 天朋友還沒有查詢`;
   const m0 = fr.filter(x => x.r === 0 && /^(配對|客戶|買方)/.test(x.t)).length;
   return `最近 ${days} 天朋友查了 ${fr.filter(x => typeof x.r === 'number').length} 次，有問題 ${bad.length} 次${m0 ? `（配對 0 件另有 ${m0} 次）` : ''}\n\n`
-    + (bad.slice(-15).map(x => `${x.at.slice(5, 10)} ${x.u}｜${L[x.r] || x.r}｜「${x.t.slice(0, 40)}」${x.last ? `（前一句：${x.last.slice(0, 20)}）` : ''}`).join('\n') || '沒有問題 👍')
+    + (bad.slice(-15).map(x => `${x.at.slice(5, 10)} ${x.u}｜${L[x.r] || x.r}｜「${x.t.slice(0, 40)}」${x.why ? `（${x.why.slice(0, 30)}）` : ''}${x.last ? `（前一句：${x.last.slice(0, 20)}）` : ''}`).join('\n') || '沒有問題 👍')
     + '\n\n完整紀錄：bash tools/line-usage.sh';
 }
 
@@ -633,7 +633,9 @@ const ADMIN_HELP = `🛠 管理者模式（只有你的對話有）：
 ・成員：看核准過的朋友、誰收推播
 ・移除 1：取消某位朋友的權限
 ・問題：朋友最近 7 天查不到／看不懂／找不到地點／回報的句子（「問題 30」看 30 天）；朋友打「回報」會主動推給你
-・使用量：每個人最近 7 天查幾次`;
+・使用量：每個人最近 7 天查幾次
+・學到的：AI 學會的說法（之後同一句直接照著查）；改錯的「忘記 3」
+・朋友問到系統答不了的，會回他「已回報 佑昇處理」並推給你（每天最多 5 則）`;
 
 // 管理者指令（只有 LINE_ALLOW 第一位）
 async function adminCmd(env, S, t) {
@@ -675,6 +677,19 @@ async function adminCmd(env, S, t) {
     if (ok) for (const p of pick) await logUse(S, { u: p.id, n: p.name, t: '（核准開通）', r: 'join' });
     return ok ? `✅ 已開通：${who}\n他下次傳訊息就能直接查（不會主動通知他，可以跟他說一聲）` : `已拒絕：${who}`;
   }
+  // AI 學到的說法（web/src/ai.mjs learn）：看清單、改錯的忘掉
+  if (/^(學到的|學習|學到什麼)$/.test(t)) {
+    const list = (await S.get('learn-list', 'json')) || [];
+    if (!list.length) return '還沒學到新說法（AI 改寫成功一次就會記下來）';
+    return 'AI 學到的說法（最近 30 組，同一句之後直接照這樣查）：\n' + list.map(([a, b], i) => `${i + 1}. 「${a.slice(0, 30)}」→「${b}」`).join('\n') + '\n\n改錯的打「忘記 3」';
+  }
+  if ((m = t.match(/^忘記\s*(\d{1,2})$/))) {
+    const list = (await S.get('learn-list', 'json')) || [], i = Number(m[1]) - 1;
+    if (!list[i]) return '沒有這個號碼，打「學到的」看清單';
+    const [[a]] = list.splice(i, 1);
+    await Promise.all([S.put('learn-list', JSON.stringify(list), { expirationTtl: 90 * 86400 }), S.put(`learn-${a.slice(0, 80)}`, '{}', { expirationTtl: 60 })]);
+    return `已忘記「${a.slice(0, 40)}」`;
+  }
   if (/^(成員|名單|使用者)$/.test(t)) {
     const ms = await getMembers(S);
     if (!ms.length) return '還沒有核准過的朋友（打「待核准」看申請）';
@@ -700,7 +715,7 @@ export async function usage(env, days = 7) {
   const S = store(env), ms = await getMembers(S), ids = envIds(env);
   const names = Object.fromEntries(ms.map(x => [x.id, x.name]));
   const who = id => names[id] || (ids.indexOf(id) === 0 ? '管理者' : ids.includes(id) ? `名單${ids.indexOf(id) + 1}` : id.slice(0, 6));
-  return { days, members: ms.map(x => ({ name: x.name, at: x.at, push: x.push })), logs: rs.map(r => { const j = JSON.parse(r.v); return { ...j, u: who(j.u) }; }) };
+  return { days, members: ms.map(x => ({ name: x.name, at: x.at, push: x.push })), learned: (await S.get('learn-list', 'json')) || [], logs: rs.map(r => { const j = JSON.parse(r.v); return { ...j, u: who(j.u) }; }) };
 }
 
 const answer = (env, uid, text) => answerFor(store(env), uid, text);
@@ -993,11 +1008,22 @@ async function handle(env, ev) {
     const ru = rulesFor(t);
     if (ru) { await reply(env, e.replyToken, ru, RULE_BTNS); await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r: 'rule', ms: 0 }); continue; }
     const t0 = Date.now();
-    const { out, r, ai, model } = await respond(env, S, uid, t);
-    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP) || out.startsWith('看不懂') || r === 'ai-x');
-    await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r, ms: Date.now() - t0, ...(ai ? { ai } : {}), ...(model ? { m: model } : {}) });
+    const { out, r, ai, model, why } = await respond(env, S, uid, t);
+    await reply(env, e.replyToken, out, out === WELCOME || out.endsWith(HELP) || out.startsWith('看不懂'));
+    await logUse(S, { u: uid, n: name, t: t.slice(0, 200), r, ms: Date.now() - t0, ...(ai ? { ai } : {}), ...(model ? { m: model } : {}), ...(why ? { why } : {}) });
+    // 答不了的 → 推給管理者（朋友才推；每天最多 REP_DAY 則，超過的照樣在「問題」清單）
+    if (r === 'ai-x' && uid !== ids[0] && ids[0]) {
+      const k = `rep-${twNow().slice(0, 10)}`, n = Number(await S.get(k)) || 0;
+      if (n < REP_DAY) {
+        await S.put(k, String(n + 1), { expirationTtl: 2 * 86400 });
+        await pushAdmin(env, ids[0], `🙋 ${name || '朋友'} 問了系統答不了的：\n「${t.slice(0, 200)}」${why ? `\n（${why.slice(0, 100)}）` : ''}`, ['問題']);
+      }
+    }
   }
 }
+const REP_DAY = 5;
+// 還沒辦法處理的一律這樣回（11/07 用戶指定），問題記進 ai-x、推給管理者，之後照著優化
+export const UNSOLVED = '已回報 佑昇處理';
 
 // 一句話 → 回覆：規則先查；規則答不好（看不懂／找不到地點／0 件／只回說明或整份規則）→ AI 客服（web/src/ai.mjs）
 //   /api/ingest/line-ai 也走這裡（本機 bash tools/line-ai.sh 測正式 AI，不經 LINE）
@@ -1016,9 +1042,11 @@ export async function respond(env, S, uid, t) {
   const weak = r === 'x' || r === 'geo' || r === 0 || dropped || follow || ((out === HELP || RULE_TEXT.has(out)) && !CMD.test(t));
   if (weak && t.length >= 2) {
     try {
-      const a = await aiAssist(env, S, uid, t, out, r, { answerFor, outcome, help: HELP, last });
-      if (a) return a;
+      const a = await aiAssist(env, S, uid, t, out, r, { answerFor, outcome, help: HELP, last, follow });
+      if (a) return a.r === 'ai-x' ? { ...a, out: UNSOLVED, why: a.out.replace(/^🤖\s*/, '') } : a;
     } catch (e) { console.log(`[AI] 失敗：${e.stack || e.message}`); }
   }
+  // 規則看不懂、AI 也沒救回來 → 同樣當答不了
+  if (r === 'x') return { out: UNSOLVED, r: 'ai-x', why: '規則看不懂、AI 沒改寫出來' };
   return { out, r };
 }

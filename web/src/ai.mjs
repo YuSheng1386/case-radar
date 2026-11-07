@@ -100,7 +100,29 @@ const norm = s => String(s).replace(/\s+/g, ' ').trim();
 // 規則的回覆不夠好時才叫（out＝規則的回覆、r＝outcome 分類）
 //   answerFor：line.mjs 的查詢函式（用改寫後的句子再查一次）；outcome：分類
 //   回傳 null＝維持規則的回覆
-export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, help, last }) {
+// 學起來（11/07 用戶：持續學習、累積的問題持續優化）
+//   AI 改寫後查得到的句子 → learn-<句子>（90 天）：下次同一句不叫 AI、直接用（快、不花額度）
+//   最近學到的 LEARN_MAX 組放進 learn-list，當範例一起給 AI（越用越懂這群朋友的說法）
+//   接續上一句的（「那大里呢」）跟上一句有關，不學
+const LEARN_MAX = 30, LEARN_DAYS = 90;
+const learnKey = t => `learn-${norm(t).slice(0, 80)}`;
+async function learn(S, t, q) {
+  await S.put(learnKey(t), JSON.stringify({ q, at: twDay() }), { expirationTtl: LEARN_DAYS * 86400 });
+  const list = ((await S.get('learn-list', 'json')) || []).filter(([a]) => a !== norm(t));
+  list.push([norm(t).slice(0, 120), q]);
+  await S.put('learn-list', JSON.stringify(list.slice(-LEARN_MAX)), { expirationTtl: LEARN_DAYS * 86400 });
+}
+
+export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, help, last, follow }) {
+  // 學過的句子：直接用，不叫 AI
+  if (!follow) {
+    const got = await S.get(learnKey(t), 'json');
+    if (got?.q) {
+      const out2 = await answerFor(S, uid, got.q);
+      const r2 = outcome(out2);
+      if (typeof r2 === 'number' && r2 > 0) return { out: `🤖 我理解成：「${got.q}」\n\n${out2}`, r: r2, ai: got.q, model: 'learned' };
+    }
+  }
   if (!env.AI) return null;
   const k = `ai-${uid}-${twDay()}`;
   const n = Number(await S.get(k)) || 0;
@@ -108,7 +130,9 @@ export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, hel
   await S.put(k, String(n + 1), { expirationTtl: 2 * 86400 });
   await typing(env, uid);
   const why = r === 'x' ? '系統看不懂' : r === 'geo' ? '找不到地點' : r === 0 ? '查到 0 件' : typeof r === 'number' ? '系統只照這一句查，可能漏了上一次的條件或看不懂的字' : '系統只回了說明';
-  const user = `${last?.text && last.text !== t ? `上一次查詢：「${last.text}」\n` : ''}使用者說：「${t.slice(0, 1500)}」\n（${why}）`;
+  const ex = (await S.get('learn-list', 'json')) || [];
+  const user = (ex.length ? `以前改寫成功的例子（同樣說法照這樣改）：\n${ex.slice(-15).map(([a, b]) => `「${a}」→「${b}」`).join('\n')}\n\n` : '')
+    + `${last?.text && last.text !== t ? `上一次查詢：「${last.text}」\n` : ''}使用者說：「${t.slice(0, 1500)}」\n（${why}）`;
   let a = await callAI(env, help, user);
   if (!a) return null;
   // 改寫後還是找不到地點／0 件 → 把結果告訴 AI 再改一次（最多 2 輪）
@@ -119,7 +143,10 @@ export async function aiAssist(env, S, uid, t, out, r, { answerFor, outcome, hel
     const r2 = outcome(out2);
     const note = a.note ? `\n（${String(a.note).slice(0, 200)}）` : '';
     const res = { out: `🤖 我理解成：「${q}」${note}\n\n${out2}`, r: r2, ai: q, model: a.model };
-    if (typeof r2 === 'number' && r2 > 0) return res;
+    if (typeof r2 === 'number' && r2 > 0) {
+      if (!follow && t.length <= 200) await learn(S, t, q).catch(e => console.log(`[AI] 學習寫入失敗 ${e.message}`));
+      return res;
+    }
     if (r2 === 0 && !best) best = res;
     if (round === 1) break;
     const fail = r2 === 'geo' ? `找不到地點（${out2.split('\n')[0]}）。地點請換成附近的路名或知名地標（學校、美術館、百貨、公園），或拿掉附近條件`
