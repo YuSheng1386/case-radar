@@ -9,8 +9,9 @@
 import { findPlace, km } from './geo.mjs';
 import { store } from './store.mjs';
 import { pickAlive, deadNote, caseToken, CASE_TTL } from './linkcheck.mjs';
-import { rulesFor, RULE_BTNS, ensureFriendMenu } from './rules.mjs';
-export { ensureFriendMenu };
+import { rulesFor, RULE_BTNS, ensureMenus } from './rules.mjs';
+// 對話選單（朋友＝使用規則；管理者＝管理＋使用規則合併），名字沿用 worker.js 的 import
+export const ensureFriendMenu = (env, S) => ensureMenus(env, S, envIds(env)[0]);
 
 const PAGE = 8;
 const MAP_MAX = 150;   // 地圖最多標幾件
@@ -906,7 +907,7 @@ export async function webhook(req, env, ctx) {
   //   10/30：有結果的查詢要測各平台連結，整段約 2 秒，LINE 先斷線 → Worker 被取消（outcome canceled）、回覆送不出去（已讀不回）
   const job = Promise.all([handle(env, ev).catch(e => console.log(`LINE 查詢失敗：${e.stack || e.message}`)),
     // 朋友的對話選單（使用規則）版本變了就自己重裝
-    ensureFriendMenu(env, store(env)).then(r => r.richMenuId && console.log('[選單] 朋友選單已更新', r.richMenuId), e => console.log(`[選單] 失敗 ${e.message}`))]);
+    ensureFriendMenu(env, store(env)).then(r => (r.friends?.richMenuId || r.admin?.richMenuId) && console.log('[選單] 已更新', JSON.stringify(r)),e => console.log(`[選單] 失敗 ${e.message}`))]);
   if (ctx?.waitUntil) { ctx.waitUntil(job); return new Response('ok'); }
   await job;
   return new Response('ok');

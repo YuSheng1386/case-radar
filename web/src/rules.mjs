@@ -90,39 +90,40 @@ export function rulesFor(t) {
   return null;
 }
 
-// 朋友用的對話選單（LINE 預設 rich menu，所有好友都看得到；管理者綁了自己的管理選單會蓋掉這個）
-//   圖：public/menu-friends.png（tools/friends-menu.py 畫，2500×1686，3×2 格）
-//   selected:true＝打開聊天室就展開（用戶 11/07：選單要常駐）；使用者自己收起來後點底下那條就再打開
-//   版本號改了，Worker 收到下一則 LINE 訊息或 9 點定時時就自己重裝（不用跑腳本、不用金鑰）
-export const MENU = {
-  ver: '2026-11-07b', name: '案件雷達使用規則', bar: '📖 使用規則',
-  cells: [
-    { type: 'uri', uri: GUIDE_URL }, { type: 'message', text: '開發規則' }, { type: 'message', text: '配對規則' },
-    { type: 'message', text: '同公司' }, { type: 'message', text: '推播規則' }, { type: 'message', text: '今天的案件' }
-  ]
-};
-export async function ensureFriendMenu(env, S) {
-  if (!env.LINE_TOKEN || env.LINE_API) return { skip: true };   // 測試環境（假 LINE）不裝
-  if ((await S.get('menu-friends', 'text')) === MENU.ver) return { ok: true, same: true };
+// LINE 對話選單（常駐聊天室底下，selected:true＝打開就展開；用戶 11/07）
+//   朋友：預設選單（所有好友）＝使用規則 6 格
+//   管理者：綁自己的合併選單＝上排管理 4 格＋下面同樣 6 格（LINE 一人只能掛一個選單；用戶 11/07 要兩種都有）
+//   版面在 menus.mjs（tools/friends-menu.py 畫圖也讀它）；ver 改了，Worker 收到下一則 LINE 訊息或 9 點定時時自己重裝（不用跑腳本、不用金鑰）
+import MENUS from './menus.mjs';
+export const MENU = MENUS.friends;
+async function install(env, S, m, adminId) {
+  const to = m.to === 'admin' ? adminId : 'all';
+  if (!to) return { skip: true };
+  const key = `menu-${m.to}`;
+  if ((await S.get(key, 'text')) === `${m.ver}|${to}`) return { same: true };
   const H = { Authorization: `Bearer ${env.LINE_TOKEN}` };
-  const W = 2500, Hh = 1686, w = W / 3, h = Hh / 2;
   const r1 = await fetch('https://api.line.me/v2/bot/richmenu', {
     method: 'POST', headers: { ...H, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ size: { width: W, height: Hh }, selected: true, name: MENU.name, chatBarText: MENU.bar,
-      areas: MENU.cells.map((a, i) => ({ bounds: { x: Math.round((i % 3) * w), y: Math.round(Math.floor(i / 3) * h), width: Math.round(w), height: Math.round(h) },
-        action: a.type === 'uri' ? { type: 'uri', uri: a.uri } : { type: 'message', text: a.text } })) })
+    body: JSON.stringify({ size: { width: 2500, height: 1686 }, selected: true, name: m.name, chatBarText: m.bar,
+      areas: m.cells.map(c => ({ bounds: { x: c.x, y: c.y, width: c.w, height: c.h },
+        action: c.uri ? { type: 'uri', uri: c.uri } : { type: 'message', text: c.text } })) })
   });
   if (!r1.ok) return { ok: false, step: '建選單', error: `${r1.status} ${(await r1.text()).slice(0, 200)}` };
   const { richMenuId } = await r1.json();
-  const png = await env.ASSETS.fetch(new Request(`${SITE}/menu-friends.png`));
+  const png = await env.ASSETS.fetch(new Request(`${SITE}/${m.png}`));
   if (!png.ok) return { ok: false, step: '讀圖', error: String(png.status) };
   const r2 = await fetch(`https://api-data.line.me/v2/bot/richmenu/${richMenuId}/content`, { method: 'POST', headers: { ...H, 'Content-Type': 'image/png' }, body: await png.arrayBuffer() });
   if (!r2.ok) return { ok: false, step: '傳圖', error: `${r2.status} ${(await r2.text()).slice(0, 200)}` };
-  const r3 = await fetch(`https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}`, { method: 'POST', headers: H });
-  if (!r3.ok) return { ok: false, step: '設成預設', error: `${r3.status} ${(await r3.text()).slice(0, 200)}` };
+  const r3 = await fetch(to === 'all' ? `https://api.line.me/v2/bot/user/all/richmenu/${richMenuId}` : `https://api.line.me/v2/bot/user/${to}/richmenu/${richMenuId}`, { method: 'POST', headers: H });
+  if (!r3.ok) return { ok: false, step: '綁定', error: `${r3.status} ${(await r3.text()).slice(0, 200)}` };
+  // 同名的舊選單刪掉（含 tools/admin-menu.sh 裝的舊 4 格管理選單）
   const list = await fetch('https://api.line.me/v2/bot/richmenu/list', { headers: H }).then(r => r.json()).catch(() => ({ richmenus: [] }));
-  for (const m of list.richmenus || []) if (m.name === MENU.name && m.richMenuId !== richMenuId)
-    await fetch(`https://api.line.me/v2/bot/richmenu/${m.richMenuId}`, { method: 'DELETE', headers: H });
-  await S.put('menu-friends', MENU.ver);
+  for (const x of list.richmenus || []) if (x.name === m.name && x.richMenuId !== richMenuId)
+    await fetch(`https://api.line.me/v2/bot/richmenu/${x.richMenuId}`, { method: 'DELETE', headers: H });
+  await S.put(key, `${m.ver}|${to}`);
   return { ok: true, richMenuId };
+}
+export async function ensureMenus(env, S, adminId) {
+  if (!env.LINE_TOKEN || env.LINE_API) return { skip: true };   // 測試環境（假 LINE）不裝
+  return { friends: await install(env, S, MENUS.friends, adminId), admin: await install(env, S, MENUS.admin, adminId) };
 }
